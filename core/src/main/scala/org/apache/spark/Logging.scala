@@ -1,6 +1,7 @@
 package org.apache.spark
 
 import org.apache.log4j.{LogManager, PropertyConfigurator}
+import org.apache.spark.util.Utils
 import org.slf4j.impl.StaticLoggerBinder
 import org.slf4j.{Logger, LoggerFactory}
 
@@ -9,7 +10,7 @@ import org.slf4j.{Logger, LoggerFactory}
  */
 trait Logging {
 
-  private var log_ : Logger = null;
+  @transient private var log_ : Logger = null;
 
   protected def log: Logger = {
     if(log_ == null){
