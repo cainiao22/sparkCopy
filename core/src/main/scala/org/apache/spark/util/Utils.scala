@@ -26,7 +26,7 @@ private[spark] object Utils extends Logging {
    */
   def getSparkClassLoader = getClass.getClassLoader
 
-  def formatWindowsPath(path:String):String = path.replace("\\", "/")
+  def formatWindowsPath(path: String): String = path.replace("\\", "/")
 
   /**
    * Return a well-formed URI for the file described by a user input string.
@@ -38,9 +38,9 @@ private[spark] object Utils extends Logging {
 
     // In Windows, the file separator is a backslash(反斜线), but this is inconsistent(不一致) with the URI format
     val windows = isWindows || testWindows
-    val formattedPath = if(windows) formatWindowsPath(path) else path
+    val formattedPath = if (windows) formatWindowsPath(path) else path
     val uri = new URI(formattedPath)
-    if(uri.getPath == null){
+    if (uri.getPath == null) {
       throw new IllegalArgumentException(s"Given path is malformed: $uri")
     }
     uri.getScheme match {
@@ -56,11 +56,28 @@ private[spark] object Utils extends Logging {
   }
 
   /** Resolve a comma-separated list of paths. */
-  def resolveURIs(paths:String, testWindows:Boolean = false):String = {
-    if(paths == null || paths.trim.isEmpty){
+  def resolveURIs(paths: String, testWindows: Boolean = false): String = {
+    if (paths == null || paths.trim.isEmpty) {
       ""
-    }else{
-      paths.split(",").map{p => Utils.resolveURI(p, testWindows)}.mkString(",")
+    } else {
+      paths.split(",").map { p => Utils.resolveURI(p, testWindows) }.mkString(",")
+    }
+  }
+
+  /** Return all non-local paths from a comma-separated list of paths. */
+  def nonLocalPaths(paths: String, testWindows: Boolean = false): Array[String] = {
+    val windows = isWindows || testWindows
+    if (paths == null || paths.trim.isEmpty) {
+      Array.empty
+    } else {
+      paths.split(",").filter { p =>
+        val formattedPath = if (windows) formatWindowsPath(p) else p
+        new URI(formattedPath).getScheme match {
+          case windowsDriver(d) if windows => false
+          case "local" | "file" | null => false
+          case _ => true
+        }
+      }
     }
   }
 }
