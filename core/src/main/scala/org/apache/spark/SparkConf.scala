@@ -1,5 +1,6 @@
 package org.apache.spark
 
+import scala.collection.JavaConverters._
 import scala.collection.mutable.HashMap
 
 /**
