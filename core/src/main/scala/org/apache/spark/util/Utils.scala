@@ -6,6 +6,8 @@ import java.net.URI
 import org.apache.commons.lang3.SystemUtils
 import org.apache.spark.Logging
 
+import scala.util.Try
+
 /**
  * Created by Administrator on 2017/5/23.
  */
@@ -26,7 +28,30 @@ private[spark] object Utils extends Logging {
    */
   def getSparkClassLoader = getClass.getClassLoader
 
+  def getContextOrSparkClassLoader = Option(Thread.currentThread().getContextClassLoader).getOrElse(getSparkClassLoader)
+
+  def classIsLoadable(clazz:String):Boolean = {
+    Try{Class.forName(clazz, false, getContextOrSparkClassLoader)}.isSuccess
+  }
+
+  /**
+   * Format a Windows path such that it can be safely passed to a URI.
+   */
   def formatWindowsPath(path: String): String = path.replace("\\", "/")
+
+  /**
+   * Indicates whether Spark is currently running unit tests.
+   */
+  def isTesting = {
+    sys.env.contains("SPARK_TESTING") || sys.props.contains("spark.testing")
+  }
+
+  /**
+   * Strip the directory from a path name
+   */
+  def stripDirectory(path: String): String = {
+    new File(path).getName
+  }
 
   /**
    * Return a well-formed URI for the file described by a user input string.

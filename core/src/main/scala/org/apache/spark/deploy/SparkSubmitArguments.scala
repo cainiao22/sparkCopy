@@ -2,11 +2,13 @@ package org.apache.spark.deploy
 
 import java.io.{IOException, FileInputStream, File}
 import java.util.Properties
+import java.util.jar.JarFile
 
 import org.apache.spark.SparkException
 import org.apache.spark.util.Utils
 
 import scala.collection.JavaConversions._
+import scala.collection.immutable.HashMap
 import scala.collection.mutable.ArrayBuffer
 
 /**
@@ -39,6 +41,112 @@ private[spark] class SparkSubmitArguments(args: Seq[String]) {
   var pyFiles:String = null
 
   parseOpts(args.toList)
+  loadDefaults()
+  checkRequiredArguments()
+
+  /** Return default present in the currently defined defaults file. */
+  def getDefaultSparkProperties = {
+    val defaultProperties = new HashMap[String, String]
+    if(verbose) SparkSubmit.printStream.println(s"using properties file: $propertiesFile")
+    Option(propertiesFile).foreach{fileName =>
+      val file = new File(fileName)
+      SparkSubmitArguments.getPropertiesFromFile(file).foreach{case (k, v) =>
+        if(k.startsWith("spark")){
+          defaultProperties(k) =
+            if(verbose) SparkSubmit.printStream.println(s"Adding default property: $k=$v")
+        }else{
+          SparkSubmit.printWarning(s"Ignoring non-spark config property: $k=$v")
+        }
+      }
+    }
+    defaultProperties
+  }
+
+  /** Fill in any undefined values based on the current properties file or built-in defaults. */
+  private def loadDefaults(): Unit ={
+    if(propertiesFile == null){
+      sys.env.get("SPARK_HOME").foreach{sparkHome =>
+        val sep = File.separator
+        val defaultPath = s"${sparkHome}${sep}conf/${sep}sperk-defaults.conf"
+        val file = new File(defaultPath)
+        if(file.exists()){
+          propertiesFile = file.getAbsolutePath
+        }
+      }
+    }
+
+    val defaultProperties = getDefaultSparkProperties
+
+    master = Option(master).getOrElse(defaultProperties.get("spark.master").orNull)
+    executorMemory = Option(executorMemory)
+      .getOrElse(defaultProperties.get("spark.executor.memory").orNull)
+    executorCores = Option(executorCores)
+      .getOrElse(defaultProperties.get("spark.executor.cores").orNull)
+    totalExecutorCores = Option(totalExecutorCores)
+      .getOrElse(defaultProperties.get("spark.cores.max").orNull)
+    name = Option(name).getOrElse(defaultProperties.get("spark.app.name").orNull)
+    jars = Option(jars).getOrElse(defaultProperties.get("spark.jars").orNull)
+
+    // This supports env vars in older versions of Spark
+    master = Option(master).getOrElse(System.getenv("MASTER"))
+    deployMode = Option(deployMode).getOrElse(System.getenv("DEPLOY_MODE"))
+
+    // Try to set main class from JAR if no --class argument is given
+    if(mainClass == null && !isPython && primaryResource != null){
+      try{
+        val jar = new JarFile(primaryResource)
+        mainClass = jar.getManifest.getMainAttributes.getValue("Main-class")
+      }catch {
+        case e:Exception =>
+          SparkSubmit.printErrorAndExit(s"can't load main class from jar: $primaryResource")
+          return
+      }
+    }
+
+    master = Option(master).getOrElse("local[*]")
+    name = Option(name).orElse(Option(mainClass)).orNull
+    if(name == null && primaryResource != null){
+      name = Utils.stripDirectory(primaryResource)
+    }
+
+  }
+
+  /** Ensure that required fields exists. Call this only once all defaults are loaded. */
+  private def checkRequiredArguments() = {
+    if (args.length == 0) {
+      printUsageAndExit(-1)
+    }
+    if (primaryResource == null) {
+      SparkSubmit.printErrorAndExit("Must specify a primary resource (JAR or Python file)")
+    }
+    if (mainClass == null && !isPython) {
+      SparkSubmit.printErrorAndExit("No main class set in JAR; please specify one with --class")
+    }
+    if (pyFiles != null && !isPython) {
+      SparkSubmit.printErrorAndExit("--py-files given but primary resource is not a Python script")
+    }
+
+    // Require all python files to be local, so we can add them to the PYTHONPATH
+    if (isPython) {
+      if (Utils.nonLocalPaths(primaryResource).nonEmpty) {
+        SparkSubmit.printErrorAndExit(s"Only local python files are supported: $primaryResource")
+      }
+      val nonLocalPyFiles = Utils.nonLocalPaths(pyFiles).mkString(",")
+      if (nonLocalPyFiles.nonEmpty) {
+        SparkSubmit.printErrorAndExit(
+          s"Only local additional python files are supported: $nonLocalPyFiles")
+      }
+    }
+
+    if (master.startsWith("yarn")) {
+      val hasHadoopEnv = sys.env.contains("HADOOP_CONF_DIR") || sys.env.contains("YARN_CONF_DIR")
+      if (!hasHadoopEnv && !Utils.isTesting) {
+        throw new Exception(s"When running with master '$master' " +
+          "either HADOOP_CONF_DIR or YARN_CONF_DIR must be set in the environment.")
+      }
+    }
+
+  }
 
 
   private def parseOpts(opts:Seq[String]): Unit ={
