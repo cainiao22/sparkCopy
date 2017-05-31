@@ -1,17 +1,20 @@
 package org.apache.spark.deploy
 
-import java.io.PrintStream
+import java.io.{File, PrintStream}
+import java.lang.reflect.InvocationTargetException
+import java.net.URL
 
+import org.apache.spark.Logging
+import org.apache.spark.executor.ExecutorURLClassLoader
 import org.apache.spark.util.Utils
 
 import scala.collection.mutable.{HashMap, Map}
 import scala.collection.mutable.ArrayBuffer
-import scala.collection.parallel.mutable
 
 /**
  * Created by Administrator on 2017/5/24.
  */
-object SparkSubmit {
+object SparkSubmit extends Logging {
 
   private val YARN = 1
   private val STANDALONE = 2
@@ -30,7 +33,7 @@ object SparkSubmit {
       printStream.println(appArgs)
     }
     val (childArgs, classPath, sysProps, mainClass) = createLaunchEnv(appArgs)
-    launch(childArgs, classPath, sysProps, appArgs.verbose)
+    launch(childArgs, classPath, sysProps, mainClass, appArgs.verbose)
   }
 
   private[spark] var printStream: PrintStream = System.err
@@ -270,7 +273,44 @@ object SparkSubmit {
       printStream.println("\n")
     }
 
-    val loader = new
+    val loader = new ExecutorURLClassLoader(new Array[URL](0),
+      Thread.currentThread().getContextClassLoader)
+    Thread.currentThread().setContextClassLoader(loader)
+
+    for(jar <- childClasspath){
+      addJarToClassPath(jar, loader)
+    }
+
+    for((key, value) <- sysProps){
+      System.setProperty(key, value)
+    }
+
+    val mainClass = Class.forName(childMainClass, true, loader)
+    val mainMethod = mainClass.getMethod("main", new Array[String](0).getClass)
+    try{
+      mainMethod.invoke(null, childArgs)
+    }catch {
+      case e:InvocationTargetException => e.getCause match {
+        case cause:Throwable => throw cause
+        case null => throw e
+      }
+    }
+  }
+
+  private def addJarToClassPath(localJar:String, classLoader:ExecutorURLClassLoader): Unit ={
+    val uri = Utils.resolveURI(localJar)
+    uri.getScheme match {
+      case "local" | "file" =>
+        val file = new File(uri.getPath)
+        if(file.exists()){
+          classLoader.addURL(file.toURI.toURL)
+        }else{
+          logWarning(s"Local jar $file does not exist, skipping.")
+        }
+
+      case _ =>
+        printWarning(s"Skip remote jar $uri.")
+    }
   }
 }
 
