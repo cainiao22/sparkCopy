@@ -4,6 +4,7 @@ import java.text.SimpleDateFormat
 
 import akka.actor.{ActorRef, Actor}
 import org.apache.hadoop.fs.FileSystem
+import org.apache.spark.metrics.MetricSystem
 import org.apache.spark.ui.SparkUI
 import org.apache.spark.util.Utils
 import org.apache.spark.{SparkConf, SparkException, Logging}
@@ -52,7 +53,10 @@ private[spark] class Master(
 
   Utils.checkHost(host, "Expected hostname")
 
+  val masterMetricsSystem = MetricSystem.createMetricsSystem("master", conf, securityMgr)
+  val applicationMetricsSystem = MetricSystem.createMetricsSystem("application", conf, securityMgr)
 
+  val masterSource = new
 
   override def receive: Receive = ???
 }

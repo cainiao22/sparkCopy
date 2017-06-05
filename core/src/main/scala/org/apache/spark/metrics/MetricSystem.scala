@@ -140,4 +140,9 @@ private[spark] object MetricSystem {
 
   val MINIMAL_POLL_UNIT = TimeUnit.SECONDS
   val MINIMAL_POLL_PERIOD = 1
+
+  def createMetricsSystem(instance:String, conf:SparkConf,
+                           securityManager: SecurityManager):MetricSystem = {
+    new MetricSystem(instance, conf, securityManager)
+  }
 }
