@@ -50,6 +50,20 @@ private[spark] class MetricsConfig(val configFile:Option[String]) extends Loggin
 
     propertyCategories = subProperties(properties, INSTANCE_REGEX)
 
+    /**
+     * propertyCategories中每个key对应的prop都是单独存在的，互不影响，
+     * 但是DEFAULT_PREFIX对应的那一部分是公共的，下面这段代码是将这部分
+     * 公共属性存放到每一个key对应的prop中去（如果该prop没有配置对应属性）。
+     */
+    if(propertyCategories.contains(DEFAULT_PREFIX)){
+      val defaultProperty = propertyCategories.get(DEFAULT_PREFIX)
+      for{(inst, prop) <- propertyCategories
+         if (inst != DEFAULT_PREFIX)
+         (k, v) <- defaultProperty
+         if(prop.get(k) == null)}{
+        prop.setProperty(k, v)
+      }
+    }
   }
 
 
@@ -64,5 +78,12 @@ private[spark] class MetricsConfig(val configFile:Option[String]) extends Loggin
     }
 
     subProperties
+  }
+
+  def getInstance(inst:String):Properties = {
+    propertyCategories.get(inst) match {
+      case Some(s) => s
+      case None => propertyCategories.getOrElse(DEFAULT_PREFIX, new Properties)
+    }
   }
 }
