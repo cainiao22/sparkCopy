@@ -109,4 +109,10 @@ private[spark] object Utils extends Logging {
   def checkHost(host: String, message: String = "") {
     assert(host.indexOf(':') == -1, message)
   }
+
+  private var customHostname:Option[String] = None
+
+  def localHostName():String = {
+
+  }
 }

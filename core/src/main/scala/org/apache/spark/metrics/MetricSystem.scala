@@ -1,12 +1,9 @@
 package org.apache.spark.metrics
 
-import java.lang.Iterable
 import java.util.Properties
 import java.util.concurrent.TimeUnit
 
 import com.codahale.metrics.{Metric, MetricFilter, MetricRegistry}
-import org.apache.commons.configuration.SubsetConfiguration
-import org.apache.hadoop.metrics2.{MetricsTag, MetricsFilter}
 import org.apache.spark.metrics.sink.{MetricsServlet, Sink}
 import org.apache.spark.metrics.source.Source
 import org.apache.spark.{Logging, SparkConf}

@@ -2,8 +2,10 @@ package org.apache.spark.deploy.master
 
 import java.text.SimpleDateFormat
 
-import akka.actor.{ActorRef, Actor}
+import akka.actor.{Cancellable, ActorRef, Actor}
+import akka.remote.RemotingLifecycleEvent
 import org.apache.hadoop.fs.FileSystem
+import org.apache.spark.deploy.master.ui.MasterWebUI
 import org.apache.spark.metrics.MetricSystem
 import org.apache.spark.ui.SparkUI
 import org.apache.spark.util.Utils
@@ -16,16 +18,21 @@ import scala.collection.mutable.ArrayBuffer
  * Created by Administrator on 2017/6/1.
  */
 private[spark] class Master(
-           host:String,
-           port:Int,
-           webUiPort:Int,
-           val securityMgr:SecurityManager
-             ) extends Actor with Logging {
-  import context.dispatcher // to use Akka's scheduler.schedule()
+                             host: String,
+                             port: Int,
+                             webUiPort: Int,
+                             val securityMgr: SecurityManager
+                             ) extends Actor with Logging {
+
+  import context.dispatcher
+
+  // to use Akka's scheduler.schedule()
 
   val conf = new SparkConf()
 
-  def createDateFormat = new SimpleDateFormat("yyyyMMddHHmmss")  // For application IDs
+  def createDateFormat = new SimpleDateFormat("yyyyMMddHHmmss")
+
+  // For application IDs
   val WORKER_TIMEOUT = conf.getLong("spark.worker.timeout", 60) * 1000
   val RETAINED_APPLICATIONS = conf.getInt("spark.deploy.retainedApplications", 200)
   val REAPER_ITERATIONS = conf.getInt("spark.dead.worker.persistence", 15)
@@ -56,7 +63,42 @@ private[spark] class Master(
   val masterMetricsSystem = MetricSystem.createMetricsSystem("master", conf, securityMgr)
   val applicationMetricsSystem = MetricSystem.createMetricsSystem("application", conf, securityMgr)
 
-  val masterSource = new
+  val masterSource = new MasterSource(this)
+
+  val webUi = new MasterWebUI(this, webUiPort)
+
+  val masterPublicAddress = {
+    val envVar = System.getenv("SPARK_PUBLIC_DNS")
+    if (envVar != null) envVar else host
+  }
+
+  val masterUrl = "spark://" + host + ":" + port
+  val masterWebUiUrl: String = _
+
+  var state = RecoveryState.STANDBY
+
+  var persistenceEngine:PersistenceEngine = _
+
+  var leaderElectionAgent:ActorRef = _
+
+  private var recoveryCompletionTask:Cancellable = _
+
+  // As a temporary workaround before better ways of configuring memory, we allow users to set
+  // a flag that will perform round-robin scheduling across the nodes (spreading out each app
+  // among all the nodes) instead of trying to consolidate each app onto a small # of nodes.
+  val spreadOutApps = conf.getBoolean("spark.deploy.spreadOut", true)
+
+  // Default maxCores for applications that don't specify it (i.e. pass Int.MaxValue)
+  val defaultCores = conf.getInt("spark.deploy.defaultCores", Int.MaxValue)
+  if (defaultCores < 1) {
+    throw new SparkException("spark.deploy.defaultCores must be positive")
+  }
+
+  override def preStart(): Unit ={
+    logInfo("starting spark master at " + masterUrl)
+    context.system.eventStream.subscribe(self, classOf[RemotingLifecycleEvent])
+    webUi.bind()
+  }
 
   override def receive: Receive = ???
 }
@@ -67,7 +109,7 @@ private[spark] object Master {
   private val actorName = "Master"
   val sparkUrlRegex = "spark://([^:]+):([0-9]+)".r
 
-  def toAkkaUrl(sparkUrl:String):String = {
+  def toAkkaUrl(sparkUrl: String): String = {
     sparkUrl match {
       case sparkUrlRegex(host, port) =>
         "akka.tcp:://%s@%s:%s/user/%s".format(systemName, host, port, actorName)
