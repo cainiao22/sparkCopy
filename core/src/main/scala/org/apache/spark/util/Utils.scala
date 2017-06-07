@@ -1,11 +1,12 @@
 package org.apache.spark.util
 
 import java.io.File
-import java.net.URI
+import java.net.{InetAddress, Inet4Address, NetworkInterface, URI, URL, URLConnection}
 
 import org.apache.commons.lang3.SystemUtils
 import org.apache.spark.Logging
 
+import scala.collection.JavaConversions._
 import scala.util.Try
 
 /**
@@ -30,8 +31,10 @@ private[spark] object Utils extends Logging {
 
   def getContextOrSparkClassLoader = Option(Thread.currentThread().getContextClassLoader).getOrElse(getSparkClassLoader)
 
-  def classIsLoadable(clazz:String):Boolean = {
-    Try{Class.forName(clazz, false, getContextOrSparkClassLoader)}.isSuccess
+  def classIsLoadable(clazz: String): Boolean = {
+    Try {
+      Class.forName(clazz, false, getContextOrSparkClassLoader)
+    }.isSuccess
   }
 
   /**
@@ -110,9 +113,52 @@ private[spark] object Utils extends Logging {
     assert(host.indexOf(':') == -1, message)
   }
 
-  private var customHostname:Option[String] = None
+  lazy val localIpAddress: String = findLocalIpAddress()
+  lazy val localIpAddressHostname: String = getAddressHostName(localIpAddress)
 
-  def localHostName():String = {
+  private def findLocalIpAddress(): String = {
+    val defaultIpOverrde = System.getenv("SPARK_LOCAL_IP")
+    if (defaultIpOverrde != null) {
+      defaultIpOverrde
+    } else {
+      val address = InetAddress.getLocalHost
+      if (address.isLoopbackAddress) {
+        for (ni <- NetworkInterface.getNetworkInterfaces) {
+          for (addr <- ni.getInetAddresses if !addr.isLinkLocalAddress
+            && !addr.isLoopbackAddress && addr.isInstanceOf[Inet4Address]) {
+            // We've found an address that looks reasonable!
+            logWarning("Your hostname, " + InetAddress.getLocalHost.getHostName + " resolves to" +
+              " a loopback address: " + address.getHostAddress + "; using " + addr.getHostAddress +
+              " instead (on interface " + ni.getName + ")")
+            logWarning("Set SPARK_LOCAL_IP if you need to bind to another address")
+            return addr.getHostAddress
+          }
+        }
+        logWarning("Your hostname, " + InetAddress.getLocalHost.getHostName + " resolves to" +
+          " a loopback address: " + address.getHostAddress + ", but we couldn't find any" +
+          " external IP address!")
+        logWarning("Set SPARK_LOCAL_IP if you need to bind to another address")
+      }
+      address.getHostAddress
+    }
+  }
 
+  private var customHostname: Option[String] = None
+
+  def setCustomHostname(hostname: String): Unit = {
+    customHostname = Some(hostname)
+  }
+
+  def getAddressHostName(address: String): String = {
+    InetAddress.getByName(address).getHostName
+  }
+
+  def localHostName(): String = {
+    customHostname.getOrElse(localIpAddressHostname)
+  }
+
+  /** Return the class name of the given object, removing all dollar signs */
+  def getFormattedClassName(obj: AnyRef) = {
+    obj.getClass.getSimpleName.replace("$", "")
   }
 }

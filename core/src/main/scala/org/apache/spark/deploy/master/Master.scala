@@ -2,9 +2,11 @@ package org.apache.spark.deploy.master
 
 import java.text.SimpleDateFormat
 
-import akka.actor.{Cancellable, ActorRef, Actor}
+import akka.actor.{Props, Cancellable, ActorRef, Actor}
 import akka.remote.RemotingLifecycleEvent
+import akka.serialization.SerializationExtension
 import org.apache.hadoop.fs.FileSystem
+import org.apache.spark.deploy.master.MasterMessages.{ElectedLeader, CheckForWorkerTimeOut}
 import org.apache.spark.deploy.master.ui.MasterWebUI
 import org.apache.spark.metrics.MetricSystem
 import org.apache.spark.ui.SparkUI
@@ -13,6 +15,7 @@ import org.apache.spark.{SparkConf, SparkException, Logging}
 
 import scala.collection.mutable
 import scala.collection.mutable.ArrayBuffer
+import scala.concurrent.duration._
 
 /**
  * Created by Administrator on 2017/6/1.
@@ -77,11 +80,11 @@ private[spark] class Master(
 
   var state = RecoveryState.STANDBY
 
-  var persistenceEngine:PersistenceEngine = _
+  var persistenceEngine: PersistenceEngine = _
 
-  var leaderElectionAgent:ActorRef = _
+  var leaderElectionAgent: ActorRef = _
 
-  private var recoveryCompletionTask:Cancellable = _
+  private var recoveryCompletionTask: Cancellable = _
 
   // As a temporary workaround before better ways of configuring memory, we allow users to set
   // a flag that will perform round-robin scheduling across the nodes (spreading out each app
@@ -94,14 +97,77 @@ private[spark] class Master(
     throw new SparkException("spark.deploy.defaultCores must be positive")
   }
 
-  override def preStart(): Unit ={
+  override def preStart(): Unit = {
     logInfo("starting spark master at " + masterUrl)
     context.system.eventStream.subscribe(self, classOf[RemotingLifecycleEvent])
-    webUi.bind()
+
+    //todo WebUI#bind()
+    //webUi.bind()
+    //masterWebUiUrl = "http://" + masterPublicAddress + ":" + webUi.boundPort
+
+    context.system.scheduler.schedule(0 millis, WORKER_TIMEOUT millis, self, CheckForWorkerTimeOut)
+    masterMetricsSystem.registerSource(masterSource)
+    masterMetricsSystem.start()
+    applicationMetricsSystem.start()
+
+    persistenceEngine = RECOVERY_MODE match {
+      case "ZOOKEEPER" =>
+        logInfo("Persisting recovery state to ZooKeeper")
+        new ZooKeeperPersistenceEngine(SerializationExtension(context.system), conf)
+      case "FILESYSTEM" =>
+        logInfo("Persisting recovery state to directory: " + RECOVERY_DIR)
+        new FileSystemPersistenceEngine(RECOVERY_DIR, SerializationExtension(context.system))
+      case _ =>
+        new BlackHolePersistenceEngine
+    }
+
+    leaderElectionAgent = RECOVERY_MODE match {
+      case "ZOOKEEPER" =>
+        context.actorOf(Props(classOf[ZooKeeperLeaderElectionAgent], self, masterUrl, conf))
+      case _ =>
+        context.actorOf(Props(classOf[MonarchyLeaderAgent], self))
+    }
   }
 
-  override def receive: Receive = ???
+  override def preRestart(reason: Throwable, message: Option[Any]): Unit = {
+    super.preRestart(reason, message) // calls postStop()!
+    logError("Master actor restarted due to exception", reason)
+  }
+
+  override def postStop(): Unit = {
+    if (recoveryCompletionTask != null) {
+      recoveryCompletionTask.cancel()
+    }
+
+    //todo webUI
+    //webUi.close
+    fileSystemUsed.foreach(_.close())
+    masterMetricsSystem.stop()
+    applicationMetricsSystem.stop()
+    persistenceEngine.close()
+    context.stop(leaderElectionAgent)
+  }
+
+  //重点来了
+  override def receive = {
+    //重新选举
+    case ElectedLeader =>
+      val (storedApps, storedDrivers, storedWorkers) = persistenceEngine.readPersistedData()
+      state = if (storedApps.isEmpty && storedDrivers.isEmpty && storedWorkers.isEmpty) {
+        RecoveryState.ALIVE
+      } else {
+        RecoveryState.RECOVERING
+      }
+      logInfo("I have been elected leader! New state: " + state)
+      if(state == RecoveryState.RECOVERING){
+        //恢复持久化的app、driver、worker
+      }
+
+  }
+
+
 }
+
 
 
 private[spark] object Master {

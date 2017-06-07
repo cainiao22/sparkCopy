@@ -21,10 +21,24 @@ private[spark] class WebUI(securityManager: SecurityManager,
                            conf: SparkConf,
                            basePath: String = "") {
 
-  protected val tabs = ArrayBuffer[WebUITab]
-  protected val handlers = ArrayBuffer[ServletContextHandler]
+  protected val tabs = ArrayBuffer[WebUITab]()
+  protected val handlers = ArrayBuffer[ServletContextHandler]()
   protected var serverInfo: Option[ServerInfo] = None
-  protected val localHostName = Utils.lo
+  protected val localHostName = Utils.localHostName()
+  protected val publicHostname = Option(System.getenv("SPARK_PUBLIC_DNS")).getOrElse(localHostName)
+  private val className = Utils.getFormattedClassName(this)
+
+  def getTabs:Seq[WebUITab] = tabs.toSeq
+  def getHandlers:Seq[ServletContextHandler] = handlers.toSeq
+
+  def attachTab(tab:WebUITab): Unit ={
+    tab.pages.foreach(attachPage)
+    tabs += tab
+  }
+
+  def attachPage(page:WebUIPage): Unit ={
+
+  }
 
 }
 
