@@ -12,3 +12,7 @@ case class RequestSubmitDriver(driverDescription: DriverDescription) extends Dep
 
 
 case class RequestKillDriver(driverId:String) extends DeployMessage
+
+// Master to Worker & AppClient
+
+case class MasterChanged(masterUrl:String, masterWebUiUrl:String)

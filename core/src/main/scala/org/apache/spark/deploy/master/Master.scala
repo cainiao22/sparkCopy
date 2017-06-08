@@ -2,10 +2,11 @@ package org.apache.spark.deploy.master
 
 import java.text.SimpleDateFormat
 
-import akka.actor.{Props, Cancellable, ActorRef, Actor}
+import akka.actor._
 import akka.remote.RemotingLifecycleEvent
 import akka.serialization.SerializationExtension
 import org.apache.hadoop.fs.FileSystem
+import org.apache.spark.deploy.MasterChanged
 import org.apache.spark.deploy.master.MasterMessages.{ElectedLeader, CheckForWorkerTimeOut}
 import org.apache.spark.deploy.master.ui.MasterWebUI
 import org.apache.spark.metrics.MetricSystem
@@ -44,11 +45,12 @@ private[spark] class Master(
 
   val workers = new mutable.HashSet[WorkerInfo]
   val idToWorker = new mutable.HashMap[String, WorkerInfo]
-  val addressToWorker = new mutable.HashMap[String, WorkerInfo]
+  val addressToWorker = new mutable.HashMap[Address, WorkerInfo]
 
   val apps = new mutable.HashSet[ApplicationInfo]
   val idToApp = new mutable.HashMap[String, ApplicationInfo]
   val actorToApp = new mutable.HashMap[ActorRef, ApplicationInfo]
+  val addressToApp = new mutable.HashMap[Address, ApplicationInfo]()
   val waitingApps = new ArrayBuffer[ApplicationInfo]
   val completedApps = new ArrayBuffer[ApplicationInfo]
   var nextAppNumber = 0
@@ -161,8 +163,64 @@ private[spark] class Master(
       logInfo("I have been elected leader! New state: " + state)
       if(state == RecoveryState.RECOVERING){
         //恢复持久化的app、driver、worker
+        beginRecovery(storedApps, storedDrivers, storedWorkers)
       }
 
+  }
+
+  def beginRecovery(storedApps:Seq[ApplicationInfo], storedDrivers:Seq[DriverInfo],
+                    storedWorkers:Seq[WorkerInfo]): Unit ={
+    for(app <- storedApps){
+      logInfo("trying to recover app:" + app.id)
+      try{
+        registerApplication(app)
+        app.state = ApplicationState.UNKNOWN
+        app.driver ! MasterChanged(masterUrl, masterWebUiUrl)
+      }catch {
+        case e: Exception => logInfo("App " + app.id + " had exception on reconnect")
+      }
+    }
+
+    for(driver <- drivers){
+      drivers += driver
+    }
+
+    for(worker <- storedWorkers){
+      logInfo("Trying to recover worker: " + worker.id)
+      try{
+
+      }catch {
+        case e: Exception => logInfo("Worker " + worker.id + " had exception on reconnect")
+      }
+    }
+  }
+
+  def registerWorker(worker:WorkerInfo):Boolean = {
+    // There may be one or more refs to dead workers on this same node (w/ different ID's),
+    // remove them.
+    workers.filter{w=>
+      (worker.host == w.host && worker.port == w.port) && (w.state == WorkerState.DEAD)
+    }.foreach{w => workers -= w}
+
+    val workerAddress = worker.actor.path.address
+    if(addressToWorker.contains(workerAddress)){
+      val oldWorker = addressToWorker()
+    }
+  }
+
+  def registerApplication(app:ApplicationInfo): Unit ={
+    val appAddress = app.driver.path.address
+    if(addressToWorker.contains(appAddress)){
+      logInfo("Attempted to re-register application at same address: " + appAddress)
+      return
+    }
+
+    applicationMetricsSystem.registerSource(app.appSource)
+    apps += app
+    idToApp(app.id) = app
+    actorToApp(app.driver) = app
+    addressToApp(appAddress) =app
+    waitingApps += app
   }
 
 

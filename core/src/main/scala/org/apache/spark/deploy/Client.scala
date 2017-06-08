@@ -13,6 +13,7 @@ import org.apache.spark.{SparkConf, Logging}
 
 /**
  * Proxy that relays messages to the driver.
+ * 这个应该是给standalone用的，所以不会接受MasterChanged事件
  */
 private class ClientActor(driverArgs: ClientArguments, conf: SparkConf) extends Actor with Logging {
 
