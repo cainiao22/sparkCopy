@@ -6,8 +6,9 @@ import akka.actor._
 import akka.remote.RemotingLifecycleEvent
 import akka.serialization.SerializationExtension
 import org.apache.hadoop.fs.FileSystem
-import org.apache.spark.deploy.MasterChanged
-import org.apache.spark.deploy.master.MasterMessages.{ElectedLeader, CheckForWorkerTimeOut}
+import org.apache.spark.deploy.master.DriverState.DriverState
+import org.apache.spark.deploy.{ExecutorState, ExecutorUpdated, MasterChanged}
+import org.apache.spark.deploy.master.MasterMessages.{CompleteRecovery, ElectedLeader, CheckForWorkerTimeOut}
 import org.apache.spark.deploy.master.ui.MasterWebUI
 import org.apache.spark.metrics.MetricSystem
 import org.apache.spark.ui.SparkUI
@@ -161,56 +162,108 @@ private[spark] class Master(
         RecoveryState.RECOVERING
       }
       logInfo("I have been elected leader! New state: " + state)
-      if(state == RecoveryState.RECOVERING){
+      if (state == RecoveryState.RECOVERING) {
         //恢复持久化的app、driver、worker
         beginRecovery(storedApps, storedDrivers, storedWorkers)
+        recoveryCompletionTask = context.system.scheduler.scheduleOnce(WORKER_TIMEOUT millis, self, CompleteRecovery)
       }
+
+    case CompleteRecovery =>
+      //todo completeRecovery
 
   }
 
-  def beginRecovery(storedApps:Seq[ApplicationInfo], storedDrivers:Seq[DriverInfo],
-                    storedWorkers:Seq[WorkerInfo]): Unit ={
-    for(app <- storedApps){
+  def beginRecovery(storedApps: Seq[ApplicationInfo], storedDrivers: Seq[DriverInfo],
+                    storedWorkers: Seq[WorkerInfo]): Unit = {
+    for (app <- storedApps) {
       logInfo("trying to recover app:" + app.id)
-      try{
+      try {
         registerApplication(app)
         app.state = ApplicationState.UNKNOWN
         app.driver ! MasterChanged(masterUrl, masterWebUiUrl)
-      }catch {
+      } catch {
         case e: Exception => logInfo("App " + app.id + " had exception on reconnect")
       }
     }
 
-    for(driver <- drivers){
+    for (driver <- drivers) {
       drivers += driver
     }
 
-    for(worker <- storedWorkers){
+    for (worker <- storedWorkers) {
       logInfo("Trying to recover worker: " + worker.id)
-      try{
-
-      }catch {
+      try {
+        registerWorker(worker)
+        worker.state = WorkerState.UNKNOWN
+        worker.actor ! MasterChanged(masterUrl, masterWebUiUrl)
+      } catch {
         case e: Exception => logInfo("Worker " + worker.id + " had exception on reconnect")
       }
     }
   }
 
-  def registerWorker(worker:WorkerInfo):Boolean = {
+  def registerWorker(worker: WorkerInfo): Boolean = {
     // There may be one or more refs to dead workers on this same node (w/ different ID's),
     // remove them.
-    workers.filter{w=>
+    workers.filter { w =>
       (worker.host == w.host && worker.port == w.port) && (w.state == WorkerState.DEAD)
-    }.foreach{w => workers -= w}
+    }.foreach { w => workers -= w }
 
     val workerAddress = worker.actor.path.address
-    if(addressToWorker.contains(workerAddress)){
-      val oldWorker = addressToWorker()
+    if (addressToWorker.contains(workerAddress)) {
+      val oldWorker = addressToWorker(workerAddress)
+      if (oldWorker.state == WorkerState.UNKNOWN) {
+        // A worker registering from UNKNOWN implies that the worker was restarted during recovery.
+        // The old worker must thus be dead, so we will remove it and accept the new worker.
+        removeWorker(oldWorker)
+      } else {
+        logInfo("Attempted to re-register worker at same address: " + workerAddress)
+        return false
+      }
     }
+
+    workers += worker
+    idToWorker(worker.id) = worker
+    addressToWorker(workerAddress) = worker
+    true
   }
 
-  def registerApplication(app:ApplicationInfo): Unit ={
+  def removeWorker(worker: WorkerInfo): Unit = {
+    logInfo("Removing worker " + worker.id + " on " + worker.host + ":" + worker.port)
+    worker.setState(WorkerState.DEAD)
+    idToWorker -= worker.id
+    addressToWorker -= worker.actor.path.address
+    worker.executors.values.foreach { exec =>
+      logInfo("Telling app of lost executor: " + exec.id)
+      exec.application.driver ! ExecutorUpdated(
+        exec.id, ExecutorState.LOST, Some("work lost"), None)
+
+      exec.application.removeExecutor(exec)
+    }
+
+    for(driver <- worker.drivers.values){
+      if(driver.desc.supervise){
+        logInfo(s"Re-launching ${driver.id}")
+        relaunchDriver(driver)
+      }else{
+        logInfo(s"Not re-launching ${driver.id} because it was not supervised")
+        removeDriver(driver.id, DriverState.ERROR, None)
+      }
+    }
+    persistenceEngine.removeWorker(worker)
+  }
+
+  def relaunchDriver(driver:DriverInfo): Unit ={
+    driver.worker = None
+    driver.state = DriverState.RELAUNCHING
+    waitingDrivers += driver
+    //todo schedule实现
+    //schedule()
+  }
+
+  def registerApplication(app: ApplicationInfo): Unit = {
     val appAddress = app.driver.path.address
-    if(addressToWorker.contains(appAddress)){
+    if (addressToWorker.contains(appAddress)) {
       logInfo("Attempted to re-register application at same address: " + appAddress)
       return
     }
@@ -219,13 +272,25 @@ private[spark] class Master(
     apps += app
     idToApp(app.id) = app
     actorToApp(app.driver) = app
-    addressToApp(appAddress) =app
+    addressToApp(appAddress) = app
     waitingApps += app
   }
 
-
+  def removeDriver(driverId:String, finalState:DriverState, exception:Option[Exception]): Unit ={
+    drivers.find{d => d.id == driverId} match {
+      case Some(driver) =>
+        logInfo(s"Removing driver: $driverId")
+        drivers -= driver
+        completedDrivers += driver
+        persistenceEngine.removeDriver(driver)
+        driver.state = finalState
+        driver.exception = exception
+        driver.worker.foreach(_.removeDriver(driver))
+      case None =>
+        logWarning(s"Asked to remove unknown driver: $driverId")
+    }
+  }
 }
-
 
 
 private[spark] object Master {

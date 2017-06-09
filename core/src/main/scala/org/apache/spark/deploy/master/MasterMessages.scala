@@ -16,4 +16,6 @@ private[master] object MasterMessages {
   // Actor System to Master
   case object CheckForWorkerTimeOut
 
+  case object CompleteRecovery
+
 }

@@ -52,4 +52,14 @@ private[spark] class WorkerInfo(
     lastHeartbeat = System.currentTimeMillis()
   }
 
+  def setState(state:WorkerState.Value): Unit ={
+    this.state = state
+  }
+
+  def removeDriver(driver:DriverInfo): Unit ={
+    drivers -= driver.id
+    memoryUsed -= driver.desc.mem
+    coresUsed -= driver.desc.cores
+  }
+
 }

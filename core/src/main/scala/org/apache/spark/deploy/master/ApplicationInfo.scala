@@ -50,4 +50,11 @@ private[spark] class ApplicationInfo(
     }
   }
 
+
+  def removeExecutor(exec:ExecutorInfo): Unit ={
+    if(executors.contains(exec.id)){
+      executors -= exec.id
+      coresGranted -= exec.cores
+    }
+  }
 }

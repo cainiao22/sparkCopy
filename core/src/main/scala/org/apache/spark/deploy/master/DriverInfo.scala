@@ -14,4 +14,10 @@ private[spark] class DriverInfo(
                                  val submitDate: Date
                                  ) extends Serializable {
 
+  @transient var state:DriverState.Value = _
+  /* If we fail when launching the driver, the exception is stored here. */
+  @transient var exception:Option[Exception] = None
+  /* Most recent worker assigned to this driver */
+  @transient var worker:Option[WorkerInfo] = None
+
 }
