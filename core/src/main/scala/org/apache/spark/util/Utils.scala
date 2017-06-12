@@ -1,10 +1,12 @@
 package org.apache.spark.util
 
-import java.io.File
+import java.io.{IOException, File}
 import java.net.{InetAddress, Inet4Address, NetworkInterface, URI, URL, URLConnection}
+import java.util.Locale
 
 import org.apache.commons.lang3.SystemUtils
 import org.apache.spark.Logging
+import org.apache.spark.executor.ExecutorUncaughtExceptionHandler
 
 import scala.collection.JavaConversions._
 import scala.util.Try
@@ -160,5 +162,120 @@ private[spark] object Utils extends Logging {
   /** Return the class name of the given object, removing all dollar signs */
   def getFormattedClassName(obj: AnyRef) = {
     obj.getClass.getSimpleName.replace("$", "")
+  }
+
+  /**
+   * Execute a block of code that evaluates to Unit, forwarding any uncaught exceptions to the
+   * default UncaughtExceptionHandler
+   */
+  def tryOrExit(block : => Unit): Unit ={
+    try{
+      block
+    }catch {
+      case e:Throwable => ExecutorUncaughtExceptionHandler.uncaughtException(e)
+    }
+  }
+
+
+  def inShutdown():Boolean = {
+    try{
+      val hook = new Thread(){
+        override def run(){}
+      }
+      Runtime.getRuntime.addShutdownHook(hook)
+      //这里会返回true表示移除成功， 但是这时候代表的是运行中
+      Runtime.getRuntime.removeShutdownHook(hook)
+    }catch {
+      case ise:IllegalStateException => return true
+    }
+    false
+  }
+
+  def megabytesToString(megabytes:Long):String = {
+    bytesToString(megabytes * 1024L * 1024L)
+  }
+
+  def bytesToString(size:Long):String = {
+    val TB = 1 << 40
+    val GB = 1 << 30
+    val MB = 1 << 20
+    val KB = 1 << 10
+    val (value, unit) = {
+      if (size >= 2*TB) {
+        (size.asInstanceOf[Double] / TB, "TB")
+      } else if (size >= 2*GB) {
+        (size.asInstanceOf[Double] / GB, "GB")
+      } else if (size >= 2*MB) {
+        (size.asInstanceOf[Double] / MB, "MB")
+      } else if (size >= 2*KB) {
+        (size.asInstanceOf[Double] / KB, "KB")
+      } else {
+        (size.asInstanceOf[Double], "B")
+      }
+    }
+    "%.1f %s".formatLocal(Locale.US, value, unit)
+  }
+
+  private def listFilesSafely(file: File):Seq[File] = {
+    val files = file.listFiles()
+    if(files == null){
+      throw new IOException("Failed to list files for dir: " + file)
+    }
+    files
+  }
+
+  /**
+   * Delete a file or directory and its contents recursively.
+   * Don't follow directories if they are symlinks.
+   */
+  def deleteRecursively(file:File): Unit ={
+    if(file != null){
+      if(file.isDirectory && !isSymlink(file)){
+        for(child <- file.listFiles()){
+          deleteRecursively(child)
+        }
+      }
+      if(!file.delete()){
+        // Delete can also fail if the file simply did not exist
+        if(file.exists()){
+          throw new IOException("Failed to delete: " + file.getAbsolutePath)
+        }
+      }
+    }
+  }
+
+  /**
+   *  Check to see if file is a symbolic link.
+   */
+  //todo ??? 怎么判断的？
+  def isSymlink(file: File): Boolean = {
+    if (file == null) throw new NullPointerException("File must not be null")
+    if (isWindows) return false
+    val fileInCanonicalDir = if (file.getParent() == null) {
+      file
+    } else {
+      new File(file.getParentFile().getCanonicalFile(), file.getName())
+    }
+
+    if (fileInCanonicalDir.getCanonicalFile().equals(fileInCanonicalDir.getAbsoluteFile())) {
+      return false
+    } else {
+      return true
+    }
+  }
+
+  /**
+   * Finds all the files in a directory whose last modified time is older than cutoff seconds.
+   * @param dir  must be the path to a directory, or IllegalArgumentException is thrown
+   * @param cutoff measured in seconds. Files older than this are returned.
+   */
+  def findOldestFiles(dir: File, cutoff: Long): Seq[File] = {
+    val currentTimeMillis = System.currentTimeMillis()
+    if(dir.isDirectory){
+      val files = listFilesSafely(dir)
+      files.filter{file => file.lastModified() < (currentTimeMillis - cutoff*1000)}
+    }else{
+      throw new IllegalArgumentException(dir + " is not a directory!")
+    }
   }
 }

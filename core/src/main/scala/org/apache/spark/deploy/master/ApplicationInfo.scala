@@ -19,6 +19,7 @@ private[spark] class ApplicationInfo(
                                       defaultCores: Int
                                       ) extends Serializable {
 
+
   @transient var state:ApplicationState.Value = _
   @transient var executors: mutable.HashMap[Int, ExecutorInfo] = _
   @transient var coresGranted:Int = _
@@ -56,5 +57,10 @@ private[spark] class ApplicationInfo(
       executors -= exec.id
       coresGranted -= exec.cores
     }
+  }
+
+  def markFinished(endState: ApplicationState.Value) = {
+    this.state = endState
+    this.endTime = System.currentTimeMillis()
   }
 }

@@ -6,8 +6,11 @@ import akka.actor._
 import akka.remote.RemotingLifecycleEvent
 import akka.serialization.SerializationExtension
 import org.apache.hadoop.fs.FileSystem
+import org.apache.spark.deploy.DeployMessages.RegisterWorkerFailed
+import org.apache.spark.deploy.DeployMessages.RegisterWorkerFailed
+import org.apache.spark.deploy.DeployMessages.RegisteredWorker
 import org.apache.spark.deploy.master.DriverState.DriverState
-import org.apache.spark.deploy.{ExecutorState, ExecutorUpdated, MasterChanged}
+import org.apache.spark.deploy._
 import org.apache.spark.deploy.master.MasterMessages.{CompleteRecovery, ElectedLeader, CheckForWorkerTimeOut}
 import org.apache.spark.deploy.master.ui.MasterWebUI
 import org.apache.spark.metrics.MetricSystem
@@ -171,7 +174,55 @@ private[spark] class Master(
     case CompleteRecovery =>
       //todo completeRecovery
 
+    case RegisterWorker(id, workerHost, workerPort, cores, memory, workerUiPort, publicAddress) =>
+    {
+      logInfo("Registering worker %s:%d with %d cores, %s RAM".format(
+        workerHost, workerPort, cores, Utils.megabytesToString(memory)))
+      if(state == RecoveryState.STANDBY){
+
+      }else if(idToWorker.contains(id)){
+        sender ! RegisterWorkerFailed("Duplicate worker ID")
+      }else{
+        val worker = new WorkerInfo(id, workerHost, workerPort, cores, memory,
+          sender, workerUiPort, publicAddress)
+        if(registerWorker(worker)){
+          persistenceEngine.addWorker(worker)
+          sender ! RegisteredWorker(masterUrl, masterWebUiUrl)
+          schedule()
+        }else{
+          val workerAddress = worker.actor.path.address
+          logWarning("Worker registration failed. Attempted to re-register worker at same " +
+            "address: " + workerAddress)
+          sender ! RegisterWorkerFailed("Attempted to re-register worker at same address: "
+            + workerAddress)
+        }
+      }
+    }
+
+    case Heartbeat(workerId) =>
+      idToWorker.get(workerId) match {
+        case Some(workerInfo) =>
+          workerInfo.lastHeartbeat = System.currentTimeMillis()
+        case None =>
+          logWarning("Got heartbeat from unregistered worker " + workerId)
+      }
+
+    case MasterChangeAcknowledged(appId) =>
+      idToApp.get(appId) match {
+        case Some(app) =>
+          logInfo("Application has been re-registered: " + appId)
+          app.state = ApplicationState.WAITING
+        case None =>
+          logWarning("Master change ack from unknown app: " + appId)
+      }
+
+      if(canCompleteRecovery) {completeRecovery()}
+
   }
+
+  def canCompleteRecovery =
+    apps.count(_.state == ApplicationState.UNKNOWN) == 0 &&
+    workers.count(_.state == WorkerState.UNKNOWN) == 0
 
   def beginRecovery(storedApps: Seq[ApplicationInfo], storedDrivers: Seq[DriverInfo],
                     storedWorkers: Seq[WorkerInfo]): Unit = {
@@ -199,6 +250,59 @@ private[spark] class Master(
       } catch {
         case e: Exception => logInfo("Worker " + worker.id + " had exception on reconnect")
       }
+    }
+  }
+
+  def completeRecovery(): Unit ={
+    // Ensure "only-once" recovery semantics using a short synchronization period.
+    synchronized{
+      if(state != RecoveryState.RECOVERING){return }
+      state = RecoveryState.COMPLETING_RECOVERY
+    }
+
+    workers.filter(_.state == WorkerState.UNKNOWN).foreach(removeWorker)
+    apps.filter(_.state == ApplicationState.UNKNOWN).foreach(finishApplication)
+  }
+
+  def finishApplication(app:ApplicationInfo): Unit ={
+    removeApplication(app, ApplicationState.FINISHED)
+  }
+
+  def removeApplication(app: ApplicationInfo, state: ApplicationState.Value): Unit ={
+    if(apps.contains(app)){
+      logInfo("removing app " + app.id)
+      apps -= app
+      actorToApp -= app.driver
+      addressToApp -= app.driver.path.address
+      if(completedApps.size >= RETAINED_APPLICATIONS){
+        val toRemove = math.max(RETAINED_APPLICATIONS/10, 1)
+        completedApps.take(toRemove).foreach(a => {
+          //todo webUI#detachSparkUI实现
+          //appIdToUI.remove(a.id).foreach{ui => webUi.detachSparkUI(ui)}
+          applicationMetricsSystem.removeSource(app.appSource)
+        })
+        completedApps.trimStart(toRemove)
+      }
+      completedApps += app
+      waitingApps -= app
+
+      //todo rebuild sparkUI
+
+
+      for(exec <- app.executors.values){
+        exec.worker.removeExecutor(exec)
+        exec.worker.actor ! KillExecutor(masterUrl, app.id, exec.id)
+        exec.state = ExecutorState.KILLED
+      }
+
+      app.markFinished(state)
+      if(state != ApplicationState.FINISHED){
+        //不是正常退出，通知driver进程（appClient实现是"自杀"）
+        app.driver ! ApplicationRemoved(state.toString)
+      }
+      persistenceEngine.removeApplication(app)
+      schedule()
+      logInfo("Recovery complete - resuming operations!")
     }
   }
 
@@ -257,8 +361,7 @@ private[spark] class Master(
     driver.worker = None
     driver.state = DriverState.RELAUNCHING
     waitingDrivers += driver
-    //todo schedule实现
-    //schedule()
+    schedule()
   }
 
   def registerApplication(app: ApplicationInfo): Unit = {
@@ -289,6 +392,11 @@ private[spark] class Master(
       case None =>
         logWarning(s"Asked to remove unknown driver: $driverId")
     }
+  }
+
+  //todo schedule实现
+  private def schedule(): Unit ={
+
   }
 }
 

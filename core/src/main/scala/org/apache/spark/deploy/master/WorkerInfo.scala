@@ -16,10 +16,11 @@ private[spark] class WorkerInfo(
      val port:Int,
      val cores:Int,
      val memory:Int,
-     val actor:ActorRef,
+     val actor:ActorRef, //这里其实是worker
      val webUiPort:Int,
      val publicAddress:String
        ) extends Serializable {
+
 
   Utils.checkHost(host, "Expected hostname")
   assert(port > 0)
@@ -60,6 +61,14 @@ private[spark] class WorkerInfo(
     drivers -= driver.id
     memoryUsed -= driver.desc.mem
     coresUsed -= driver.desc.cores
+  }
+
+  def removeExecutor(exec: ExecutorInfo): Unit = {
+    if(executors.contains(exec.fullId)){
+      executors -= exec.fullId
+      coresUsed -= exec.cores
+      memoryUsed -= exec.memory
+    }
   }
 
 }
