@@ -57,6 +57,12 @@ private[spark] class WorkerInfo(
     this.state = state
   }
 
+  def addDriver(driver:DriverInfo): Unit ={
+    coresUsed += driver.desc.cores
+    memoryUsed += driver.desc.mem
+    drivers(driver.id) = driver
+  }
+
   def removeDriver(driver:DriverInfo): Unit ={
     drivers -= driver.id
     memoryUsed -= driver.desc.mem

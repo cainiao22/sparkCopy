@@ -195,11 +195,23 @@ private[spark] class Worker(
           logError("App dir cleanup failed: " + e.getMessage, e)
       }
 
+    case MasterChanged(masterUrl, masterWebUiUrl) =>
+      logInfo("Master has changed, new master is at " + masterUrl)
+      changeMaster(masterUrl, masterWebUiUrl)
+
+      val execs = executors.values
+        .map(e => new ExecutorDescription(e.appId, e.execId, e.cores, e.state))
+      sender ! WorkerSchedulerStateResponse(workerId, execs.toList, drivers.keys.toSeq)
+
     case RegisterWorkerFailed(message) =>
       if(!registered){
         logError("Worker registration failed: " + message)
         System.exit(-1)
       }
+
+    case LaunchDriver(driverId, driverDesc) =>
+      logInfo(s"Asked to launch driver $driverId")
+      val driver = new DriverRunner(driverId, )
   }
 
   def generateWorkerId(): String = {

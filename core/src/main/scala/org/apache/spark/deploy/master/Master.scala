@@ -21,6 +21,7 @@ import org.apache.spark.{SparkConf, SparkException, Logging}
 import scala.collection.mutable
 import scala.collection.mutable.ArrayBuffer
 import scala.concurrent.duration._
+import scala.util.Random
 
 /**
  * Created by Administrator on 2017/6/1.
@@ -262,6 +263,21 @@ private[spark] class Master(
 
     workers.filter(_.state == WorkerState.UNKNOWN).foreach(removeWorker)
     apps.filter(_.state == ApplicationState.UNKNOWN).foreach(finishApplication)
+
+    drivers.filter(_.worker.isEmpty).foreach{d =>
+      logWarning(s"Driver ${d.id} was not found after master recovery")
+      if(d.desc.supervise){
+        logWarning(s"Re-launching ${d.id}")
+        relaunchDriver(d)
+      }else{
+        removeDriver(d.id, DriverState.ERROR, None)
+        logWarning(s"Did not re-launch ${d.id} because it was not supervised")
+      }
+    }
+
+    state = RecoveryState.ALIVE
+    schedule()
+    logInfo("Recovery complete - resuming operations!")
   }
 
   def finishApplication(app:ApplicationInfo): Unit ={
@@ -379,6 +395,14 @@ private[spark] class Master(
     waitingApps += app
   }
 
+  def launchDriver(worker:WorkerInfo, driver: DriverInfo): Unit ={
+    logInfo("Launching driver " + driver.id + " on worker " + worker.id)
+    worker.addDriver(driver)
+    driver.worker = Some(worker)
+    worker.actor ! LaunchDriver(driver.id, driver.desc)
+    driver.state = DriverState.RUNNING
+  }
+
   def removeDriver(driverId:String, finalState:DriverState, exception:Option[Exception]): Unit ={
     drivers.find{d => d.id == driverId} match {
       case Some(driver) =>
@@ -396,6 +420,17 @@ private[spark] class Master(
 
   //todo schedule实现
   private def schedule(): Unit ={
+    if(state != RecoveryState.ALIVE){return }
+
+    // First schedule drivers, they take strict precedence over applications
+    val shuffledWorkers = Random.shuffle(workers) // Randomization helps balance drivers
+    for(worker <- shuffledWorkers if worker.state == WorkerState.ALIVE){
+      for(driver <- waitingDrivers){
+        if(worker.memoryFree >= driver.desc.mem && worker.coresFree >= driver.desc.cores){
+
+        }
+      }
+    }
 
   }
 }
