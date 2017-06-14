@@ -9,6 +9,7 @@ import org.apache.spark.Logging
 import org.apache.spark.executor.ExecutorUncaughtExceptionHandler
 
 import scala.collection.JavaConversions._
+import scala.collection.mutable.ArrayBuffer
 import scala.util.Try
 
 /**
@@ -277,5 +278,57 @@ private[spark] object Utils extends Logging {
     }else{
       throw new IllegalArgumentException(dir + " is not a directory!")
     }
+  }
+
+  /**
+   * Split a string of potentially quoted arguments from the command line the way that a shell
+   * would do it to determine arguments to a command. For example, if the string is 'a "b c" d',
+   * then it would be parsed as three arguments: 'a', 'b c' and 'd'.
+   */
+  def splitCommandString(s:String):Seq[String] = {
+    val buf = new ArrayBuffer[String]()
+    var inWord = false
+    var inSingleQuote = false
+    var inDoubleQuote = false
+    val curWord = new StringBuilder
+    def endWord(): Unit ={
+      buf += curWord.toString
+      curWord.clear()
+    }
+
+    var i = 0;
+    while(i < s.length){
+      val nextChar = s.charAt(i)
+      if(inDoubleQuote){
+        if(nextChar == '"'){
+          inDoubleQuote = false
+        }else if(nextChar == '\\'){
+          if(i < s.length - 1){
+            curWord.append(s.charAt(i+1))
+            i += 1
+          }
+        }else{
+          curWord.append(nextChar)
+        }
+      } else if(inSingleQuote) {
+        if(nextChar == '\''){
+          inSingleQuote = false
+        }else {
+          curWord.append(nextChar)
+        }
+      }else if(nextChar == '"'){
+        inWord = true
+        inDoubleQuote = true
+      }else if(nextChar == '\''){
+        inWord = true
+        inSingleQuote = true
+      }else if(isSpace(nextChar)){
+        inWord = false
+      }
+    }
+  }
+
+  def isSpace(c:Char):Boolean = {
+    "\t\r\n".indexOf(c) != -1
   }
 }
