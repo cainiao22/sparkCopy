@@ -6,7 +6,7 @@ import java.util.Date
 
 import akka.remote.RemotingLifecycleEvent
 import org.apache.spark.deploy._
-import org.apache.spark.deploy.master.Master
+import org.apache.spark.deploy.master.{DriverState, Master}
 import org.apache.spark.metrics.MetricSystem
 
 import scala.collection.mutable
@@ -211,7 +211,32 @@ private[spark] class Worker(
 
     case LaunchDriver(driverId, driverDesc) =>
       logInfo(s"Asked to launch driver $driverId")
-      val driver = new DriverRunner(driverId, )
+      val driver = new DriverRunner(driverId, workDir, sparkHome, driverDesc, self, akkaUrl)
+      drivers(driverId) = driver
+      driver.start()
+
+      coresUsed += driverDesc.cores
+      memoryUsed += driverDesc.mem
+
+    case DriverStateChanged(driverId, state, exception) =>
+      state match {
+        case DriverState.ERROR =>
+          logWarning(s"Driver $driverId failed with unrecoverable exception: ${exception.get}")
+        case DriverState.FINISHED =>
+          logInfo(s"Driver $driverId exited successfully")
+        case DriverState.KILLED =>
+          logInfo(s"Driver $driverId was killed by user")
+      }
+
+      masterLock.synchronized{
+        master ! DriverStateChanged(driverId, state, exception)
+      }
+
+      val driver = drivers.remove(driverId).get
+      finishedDrivers(driverId) = driver
+      memoryUsed -= driver.driverDesc.mem
+      coresUsed -= driver.driverDesc.cores
+
   }
 
   def generateWorkerId(): String = {

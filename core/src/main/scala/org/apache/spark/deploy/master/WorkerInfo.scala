@@ -57,6 +57,10 @@ private[spark] class WorkerInfo(
     this.state = state
   }
 
+  def hasExecutor(app:ApplicationInfo):Boolean = {
+    executors.values.exists(_.application == app)
+  }
+
   def addDriver(driver:DriverInfo): Unit ={
     coresUsed += driver.desc.cores
     memoryUsed += driver.desc.mem
@@ -67,6 +71,12 @@ private[spark] class WorkerInfo(
     drivers -= driver.id
     memoryUsed -= driver.desc.mem
     coresUsed -= driver.desc.cores
+  }
+
+  def addExecutor(exec:ExecutorInfo): Unit ={
+    executors(exec.fullId) = exec
+    coresUsed += exec.cores
+    memoryUsed += exec.memory
   }
 
   def removeExecutor(exec: ExecutorInfo): Unit = {

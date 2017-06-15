@@ -1,15 +1,17 @@
 package org.apache.spark.util
 
-import java.io.{IOException, File}
+import java.io.{OutputStream, InputStream, IOException, File}
 import java.net.{InetAddress, Inet4Address, NetworkInterface, URI, URL, URLConnection}
 import java.util.Locale
 
 import org.apache.commons.lang3.SystemUtils
-import org.apache.spark.Logging
+import org.apache.spark.{SparkException, Logging}
 import org.apache.spark.executor.ExecutorUncaughtExceptionHandler
 
 import scala.collection.JavaConversions._
+import scala.collection.Map
 import scala.collection.mutable.ArrayBuffer
+import scala.io.Source
 import scala.util.Try
 
 /**
@@ -114,6 +116,10 @@ private[spark] object Utils extends Logging {
 
   def checkHost(host: String, message: String = "") {
     assert(host.indexOf(':') == -1, message)
+  }
+
+  def checkHostPort(hostPort: String, message: String = "") {
+    assert(hostPort.indexOf(':') != -1, message)
   }
 
   lazy val localIpAddress: String = findLocalIpAddress()
@@ -323,12 +329,75 @@ private[spark] object Utils extends Logging {
         inWord = true
         inSingleQuote = true
       }else if(isSpace(nextChar)){
+        endWord()
         inWord = false
       }
+      i += 1
     }
+
+    if(inWord || inSingleQuote || inDoubleQuote){
+      endWord()
+    }
+    buf
   }
 
   def isSpace(c:Char):Boolean = {
     "\t\r\n".indexOf(c) != -1
+  }
+
+  def excutaAndGetOutput(command:Seq[String], workDir:File = new File("."),
+                          extraEnvironment:Map[String, String] = Map.empty):String = {
+    val builder = new ProcessBuilder(command:_*)
+      //工作目录：进行操作需要的资源，比如文件什么的，都会在这个目录进行查找
+          .directory(workDir)
+    val environment = builder.environment()
+    for((k, v) <- extraEnvironment){
+      environment.put(k, v)
+    }
+
+    val process = builder.start()
+    new Thread("read stderr for " + command(0)){
+      override def run(): Unit ={
+        for(line <- Source.fromInputStream(process.getErrorStream).getLines()){
+          System.err.println(line)
+        }
+      }
+    }.start()
+
+    val output = new StringBuffer
+    val stdoutThread = new Thread("read stdout for " + command(0)){
+      override def run: Unit ={
+        for(line <- Source.fromInputStream(process.getInputStream).getLines()){
+          output.append(line)
+        }
+      }
+    }
+    stdoutThread.start()
+    val exitCode = process.waitFor()
+    //process停止了，但是输出流缓冲区未必读取完毕
+    stdoutThread.join()
+    if (exitCode != 0) {
+      throw new SparkException("Process " + command + " exited with code " + exitCode)
+    }
+    output.toString
+  }
+
+  /** Copy all data from an InputStream to an OutputStream */
+  def coupStream(in:InputStream,
+                 out:OutputStream,
+                 closeStreams:Boolean = false): Unit ={
+    val buf = new Array[Byte](8192)
+    var n = 0
+    while(n != -1){
+      n = in.read(buf)
+      if(n != -1){
+        out.write(buf, 0, n)
+      }
+    }
+
+    if(closeStreams){
+      in.close()
+      out.close()
+    }
   }
 }

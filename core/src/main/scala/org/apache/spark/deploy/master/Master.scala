@@ -6,6 +6,7 @@ import akka.actor._
 import akka.remote.RemotingLifecycleEvent
 import akka.serialization.SerializationExtension
 import org.apache.hadoop.fs.FileSystem
+import org.apache.spark.deploy.DeployMessages.LaunchExecutor
 import org.apache.spark.deploy.DeployMessages.RegisterWorkerFailed
 import org.apache.spark.deploy.DeployMessages.RegisterWorkerFailed
 import org.apache.spark.deploy.DeployMessages.RegisteredWorker
@@ -173,24 +174,23 @@ private[spark] class Master(
       }
 
     case CompleteRecovery =>
-      //todo completeRecovery
+    //todo completeRecovery
 
-    case RegisterWorker(id, workerHost, workerPort, cores, memory, workerUiPort, publicAddress) =>
-    {
+    case RegisterWorker(id, workerHost, workerPort, cores, memory, workerUiPort, publicAddress) => {
       logInfo("Registering worker %s:%d with %d cores, %s RAM".format(
         workerHost, workerPort, cores, Utils.megabytesToString(memory)))
-      if(state == RecoveryState.STANDBY){
+      if (state == RecoveryState.STANDBY) {
 
-      }else if(idToWorker.contains(id)){
+      } else if (idToWorker.contains(id)) {
         sender ! RegisterWorkerFailed("Duplicate worker ID")
-      }else{
+      } else {
         val worker = new WorkerInfo(id, workerHost, workerPort, cores, memory,
           sender, workerUiPort, publicAddress)
-        if(registerWorker(worker)){
+        if (registerWorker(worker)) {
           persistenceEngine.addWorker(worker)
           sender ! RegisteredWorker(masterUrl, masterWebUiUrl)
           schedule()
-        }else{
+        } else {
           val workerAddress = worker.actor.path.address
           logWarning("Worker registration failed. Attempted to re-register worker at same " +
             "address: " + workerAddress)
@@ -217,13 +217,15 @@ private[spark] class Master(
           logWarning("Master change ack from unknown app: " + appId)
       }
 
-      if(canCompleteRecovery) {completeRecovery()}
+      if (canCompleteRecovery) {
+        completeRecovery()
+      }
 
   }
 
   def canCompleteRecovery =
     apps.count(_.state == ApplicationState.UNKNOWN) == 0 &&
-    workers.count(_.state == WorkerState.UNKNOWN) == 0
+      workers.count(_.state == WorkerState.UNKNOWN) == 0
 
   def beginRecovery(storedApps: Seq[ApplicationInfo], storedDrivers: Seq[DriverInfo],
                     storedWorkers: Seq[WorkerInfo]): Unit = {
@@ -254,22 +256,24 @@ private[spark] class Master(
     }
   }
 
-  def completeRecovery(): Unit ={
+  def completeRecovery(): Unit = {
     // Ensure "only-once" recovery semantics using a short synchronization period.
-    synchronized{
-      if(state != RecoveryState.RECOVERING){return }
+    synchronized {
+      if (state != RecoveryState.RECOVERING) {
+        return
+      }
       state = RecoveryState.COMPLETING_RECOVERY
     }
 
     workers.filter(_.state == WorkerState.UNKNOWN).foreach(removeWorker)
     apps.filter(_.state == ApplicationState.UNKNOWN).foreach(finishApplication)
 
-    drivers.filter(_.worker.isEmpty).foreach{d =>
+    drivers.filter(_.worker.isEmpty).foreach { d =>
       logWarning(s"Driver ${d.id} was not found after master recovery")
-      if(d.desc.supervise){
+      if (d.desc.supervise) {
         logWarning(s"Re-launching ${d.id}")
         relaunchDriver(d)
-      }else{
+      } else {
         removeDriver(d.id, DriverState.ERROR, None)
         logWarning(s"Did not re-launch ${d.id} because it was not supervised")
       }
@@ -280,18 +284,18 @@ private[spark] class Master(
     logInfo("Recovery complete - resuming operations!")
   }
 
-  def finishApplication(app:ApplicationInfo): Unit ={
+  def finishApplication(app: ApplicationInfo): Unit = {
     removeApplication(app, ApplicationState.FINISHED)
   }
 
-  def removeApplication(app: ApplicationInfo, state: ApplicationState.Value): Unit ={
-    if(apps.contains(app)){
+  def removeApplication(app: ApplicationInfo, state: ApplicationState.Value): Unit = {
+    if (apps.contains(app)) {
       logInfo("removing app " + app.id)
       apps -= app
       actorToApp -= app.driver
       addressToApp -= app.driver.path.address
-      if(completedApps.size >= RETAINED_APPLICATIONS){
-        val toRemove = math.max(RETAINED_APPLICATIONS/10, 1)
+      if (completedApps.size >= RETAINED_APPLICATIONS) {
+        val toRemove = math.max(RETAINED_APPLICATIONS / 10, 1)
         completedApps.take(toRemove).foreach(a => {
           //todo webUI#detachSparkUI实现
           //appIdToUI.remove(a.id).foreach{ui => webUi.detachSparkUI(ui)}
@@ -305,14 +309,14 @@ private[spark] class Master(
       //todo rebuild sparkUI
 
 
-      for(exec <- app.executors.values){
+      for (exec <- app.executors.values) {
         exec.worker.removeExecutor(exec)
         exec.worker.actor ! KillExecutor(masterUrl, app.id, exec.id)
         exec.state = ExecutorState.KILLED
       }
 
       app.markFinished(state)
-      if(state != ApplicationState.FINISHED){
+      if (state != ApplicationState.FINISHED) {
         //不是正常退出，通知driver进程（appClient实现是"自杀"）
         app.driver ! ApplicationRemoved(state.toString)
       }
@@ -361,11 +365,11 @@ private[spark] class Master(
       exec.application.removeExecutor(exec)
     }
 
-    for(driver <- worker.drivers.values){
-      if(driver.desc.supervise){
+    for (driver <- worker.drivers.values) {
+      if (driver.desc.supervise) {
         logInfo(s"Re-launching ${driver.id}")
         relaunchDriver(driver)
-      }else{
+      } else {
         logInfo(s"Not re-launching ${driver.id} because it was not supervised")
         removeDriver(driver.id, DriverState.ERROR, None)
       }
@@ -373,7 +377,7 @@ private[spark] class Master(
     persistenceEngine.removeWorker(worker)
   }
 
-  def relaunchDriver(driver:DriverInfo): Unit ={
+  def relaunchDriver(driver: DriverInfo): Unit = {
     driver.worker = None
     driver.state = DriverState.RELAUNCHING
     waitingDrivers += driver
@@ -395,7 +399,7 @@ private[spark] class Master(
     waitingApps += app
   }
 
-  def launchDriver(worker:WorkerInfo, driver: DriverInfo): Unit ={
+  def launchDriver(worker: WorkerInfo, driver: DriverInfo): Unit = {
     logInfo("Launching driver " + driver.id + " on worker " + worker.id)
     worker.addDriver(driver)
     driver.worker = Some(worker)
@@ -403,8 +407,8 @@ private[spark] class Master(
     driver.state = DriverState.RUNNING
   }
 
-  def removeDriver(driverId:String, finalState:DriverState, exception:Option[Exception]): Unit ={
-    drivers.find{d => d.id == driverId} match {
+  def removeDriver(driverId: String, finalState: DriverState, exception: Option[Exception]): Unit = {
+    drivers.find { d => d.id == driverId } match {
       case Some(driver) =>
         logInfo(s"Removing driver: $driverId")
         drivers -= driver
@@ -418,20 +422,72 @@ private[spark] class Master(
     }
   }
 
+  /**
+   * Can an app use the given worker? True if the worker has enough memory and we haven't already
+   * launched an executor for the app on it (right now the standalone backend doesn't like having
+   * two executors on the same worker).
+   */
+  def canUse(app: ApplicationInfo, worker: WorkerInfo): Boolean = {
+    worker.memoryFree >= app.desc.memoryPerSlave && !worker.hasExecutor(app)
+  }
+
   //todo schedule实现
-  private def schedule(): Unit ={
-    if(state != RecoveryState.ALIVE){return }
+  /**
+   * Schedule the currently available resources among waiting apps. This method will be called
+   * every time a new app joins or resource availability changes.
+   */
+  private def schedule(): Unit = {
+    if (state != RecoveryState.ALIVE) {
+      return
+    }
 
     // First schedule drivers, they take strict precedence over applications
     val shuffledWorkers = Random.shuffle(workers) // Randomization helps balance drivers
-    for(worker <- shuffledWorkers if worker.state == WorkerState.ALIVE){
-      for(driver <- waitingDrivers){
-        if(worker.memoryFree >= driver.desc.mem && worker.coresFree >= driver.desc.cores){
-
+    for (worker <- shuffledWorkers if worker.state == WorkerState.ALIVE) {
+      for (driver <- waitingDrivers) {
+        if (worker.memoryFree >= driver.desc.mem && worker.coresFree >= driver.desc.cores) {
+          launchDriver(worker, driver)
+          //这个可以一边遍历，一边删数据？
+          waitingDrivers -= driver
         }
       }
     }
+    // Right now this is a very simple FIFO scheduler. We keep trying to fit in the first app
+    // in the queue, then the second app, etc.
+    if (spreadOutApps) {
+      for (app <- waitingApps if app.coresLeft > 0) {
+        val useableWorkers = workers.toArray.filter(_.state == WorkerState.ALIVE)
+          .filter(canUse(app, _)).sortBy(_.coresFree).reverse
+        val numUseable = useableWorkers.length
+        val assigned = new Array[Int](numUseable)
+        var toAssign = math.min(app.coresLeft, useableWorkers.map(_.coresFree).sum)
+        var pos = 0
+        while (toAssign > 0) {
+          if (useableWorkers(pos).coresFree - assigned(pos) > 0) {
+            assigned(pos) += 1
+            toAssign -= 1
+          }
+          pos = (pos + 1) % numUseable
+        }
 
+        // Now that we've decided how many cores to give on each node, let's actually give them
+        for (pos <- 0 until numUseable) {
+          if (assigned(pos) > 0) {
+            val exec = app.addExecutor(useableWorkers(pos), assigned(pos))
+
+          }
+        }
+      }
+    }
+  }
+
+  def launchExecutor(worker: WorkerInfo, exec: ExecutorInfo) {
+    logInfo("Launching executor " + exec.fullId + " on worker " + worker.id)
+    worker.addExecutor(exec)
+    worker.actor ! LaunchExecutor(masterUrl,
+      exec.application.id, exec.id, exec.application.desc, exec.cores, exec.memory)
+    exec.application.driver ! ExecutorAdded(
+      exec.id, worker.id, worker.host, exec.cores, exec.memory)
   }
 }
 

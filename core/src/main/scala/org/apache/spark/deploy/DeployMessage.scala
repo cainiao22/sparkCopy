@@ -1,6 +1,7 @@
 package org.apache.spark.deploy
 
 import org.apache.spark.deploy.ExecutorState.ExecutorState
+import org.apache.spark.deploy.master.DriverState._
 import org.apache.spark.util.Utils
 
 import scala.collection.immutable.List
@@ -22,6 +23,11 @@ case class RegisterWorker(
   Utils.checkHost(host, "Required hostname")
   assert(port > 0)
 }
+
+case class DriverStateChanged(
+                               driverId: String,
+                               state: DriverState,
+                               exception: Option[Exception]) extends DeployMessage
 
 //worker to master
 
@@ -57,6 +63,15 @@ case class RegisterWorkerFailed(message: String) extends DeployMessage
 
 case class KillExecutor(masterUrl:String, appId:String, execId:Int) extends DeployMessage
 
+case class LaunchExecutor(
+                           masterUrl: String,
+                           appId: String,
+                           execId: Int,
+                           appDesc: ApplicationDescription,
+                           cores: Int,
+                           memory: Int)
+  extends DeployMessage
+
 case class LaunchDriver(driverId: String, driverDesc: DriverDescription) extends DeployMessage
 
 // Worker internal
@@ -71,6 +86,11 @@ case class RegisterApplication(appDescription: ApplicationDescription)
 //master to AppClient
 
 case class ApplicationRemoved(message: String)
+
+// TODO(matei): replace hostPort with host
+case class ExecutorAdded(id: Int, workerId: String, hostPort: String, cores: Int, memory: Int) {
+  Utils.checkHostPort(hostPort, "Required hostport")
+}
 
 
 

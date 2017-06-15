@@ -51,6 +51,12 @@ private[spark] class ApplicationInfo(
     }
   }
 
+  def addExecutor(worker:WorkerInfo, cores:Int, useID:Option[Int] = None): ExecutorInfo ={
+    val exec = new ExecutorInfo(newExecutorId(useID), this, worker, cores, desc.memoryPerSlave)
+    executors(exec.id) = exec
+    coresGranted += cores
+    exec
+  }
 
   def removeExecutor(exec:ExecutorInfo): Unit ={
     if(executors.contains(exec.id)){
@@ -58,6 +64,10 @@ private[spark] class ApplicationInfo(
       coresGranted -= exec.cores
     }
   }
+
+  private val myMaxCores = desc.maxCores.getOrElse(defaultCores)
+
+  def coresLeft:Int = myMaxCores - coresGranted
 
   def markFinished(endState: ApplicationState.Value) = {
     this.state = endState
