@@ -5,11 +5,15 @@ import java.io.File
 import scala.collection.JavaConversions._
 import scala.collection.mutable.Map
 
+import akka.actor._
+import akka.pattern.ask
 import akka.actor.{ActorSelection, Actor}
 import akka.remote.RemotingLifecycleEvent
-import org.apache.spark.deploy.master.Master
+import org.apache.spark.deploy.master.{DriverState, Master}
 import org.apache.spark.util.AkkaUtils
 import org.apache.spark.{SparkConf, Logging}
+
+import scala.concurrent.Await
 
 /**
  * Proxy that relays messages to the driver.
@@ -71,8 +75,39 @@ private class ClientActor(driverArgs: ClientArguments, conf: SparkConf) extends 
 
   }
 
-  override def receive: Receive = {
+  def pollAndReportStatus(driverId:String): Unit ={
+    println(s"...waiting before polling master driver state")
+    Thread.sleep(5000)
+    println("...polling master for driver state")
+    val statusFuture = (masterActor ? RequestDriverStatus(driverId))(timeout)
+      .mapTo[DriverStatusResponse]
+    val statusResponse = Await.result(statusFuture, timeout)
 
+    statusResponse.found match {
+      case false =>
+        println(s"Error: cluster master did not recognize $driverId")
+        System.exit(-1)
+      case true =>
+        println(s"State of $driverId is ${statusResponse.state.get}")
+        // Worker node, if present
+        (statusResponse.workerId, statusResponse.workerHostPort, statusResponse.state) match {
+          case (Some(id), Some(hostPort), Some(DriverState.RUNNING)) =>
+            println(s"Driver running on $hostPort ($id)")
+          case _ =>
+        }
+        // Exception, if present
+        statusResponse.exception.map { e =>
+          println(s"Exception from cluster was: $e")
+          System.exit(-1)
+        }
+        System.exit(0)
+    }
+  }
+
+  override def receive: Receive = {
+    case SubmitDriverResponse(success, driverId, message) =>
+      println(message)
+      if(success) pollAndReportStatus(driverId.get) else System.exit(-1)
   }
 }
 

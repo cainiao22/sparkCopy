@@ -209,6 +209,36 @@ private[spark] class Worker(
         System.exit(-1)
       }
 
+    case LaunchExecutor(masterUrl, appId, execId, appDesc, cores_, memory_) =>
+      if(masterUrl != activeMasterUrl){
+        logWarning("Invalid Master (" + masterUrl + ") attempted to launch executor.")
+      }else{
+        try{
+          logInfo("Asked to launch executor %s/%d for %s".format(appId, execId, appDesc.name))
+          val manager = new ExecutorRunner(appId, execId, appDesc, cores_, memory_,
+            self, workerId, host,
+            appDesc.sparkHome.map(userSparkHome => new File(userSparkHome)).getOrElse(sparkHome),
+            workDir, akkaUrl, ExecutorState.RUNNING)
+          executors(appId + "/" + execId) = manager
+          manager.start()
+          coresUsed += cores_
+          memoryUsed += memory_
+          masterLock.synchronized{
+            master ! ExecutorStateChanged(appId, execId, manager.state, None, None)
+          }
+        }catch {
+          case e:Exception =>
+            logError("Failed to launch executor %s/%d for %s".format(appId, execId, appDesc.name))
+            if(executors.contains(appId + "/" + execId)){
+              executors(appId + "/" + execId).kill()
+            }
+
+            masterLock.synchronized{
+              master ! ExecutorStateChanged(appId, execId, ExecutorState.FAILED, None, None)
+            }
+        }
+      }
+
     case LaunchDriver(driverId, driverDesc) =>
       logInfo(s"Asked to launch driver $driverId")
       val driver = new DriverRunner(driverId, workDir, sparkHome, driverDesc, self, akkaUrl)

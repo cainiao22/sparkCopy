@@ -24,6 +24,14 @@ case class RegisterWorker(
   assert(port > 0)
 }
 
+case class ExecutorStateChanged(
+                                 appId: String,
+                                 execId: Int,
+                                 state: ExecutorState,
+                                 message: Option[String],
+                                 exitStatus: Option[Int])
+  extends DeployMessage
+
 case class DriverStateChanged(
                                driverId: String,
                                state: DriverState,
@@ -40,8 +48,15 @@ case class WorkerSchedulerStateResponse(id: String, executors: List[ExecutorDesc
 
 case class RequestSubmitDriver(driverDescription: DriverDescription) extends DeployMessage
 
+case class SubmitDriverResponse(success: Boolean, driverId: Option[String], message: String)
+  extends DeployMessage
 
 case class RequestKillDriver(driverId:String) extends DeployMessage
+
+case class RequestDriverStatus(driverId: String) extends DeployMessage
+
+case class DriverStatusResponse(found: Boolean, state: Option[DriverState],
+                                workerId: Option[String], workerHostPort: Option[String], exception: Option[Exception])
 
 // Master to Worker & AppClient
 
@@ -84,6 +99,8 @@ case class RegisterApplication(appDescription: ApplicationDescription)
   extends DeployMessage
 
 //master to AppClient
+
+case class RegisteredApplication(appId: String, masterUrl: String) extends DeployMessage
 
 case class ApplicationRemoved(message: String)
 

@@ -1,15 +1,13 @@
 package org.apache.spark.deploy.master
 
 import java.text.SimpleDateFormat
+import java.util.Date
 
 import akka.actor._
 import akka.remote.RemotingLifecycleEvent
 import akka.serialization.SerializationExtension
 import org.apache.hadoop.fs.FileSystem
-import org.apache.spark.deploy.DeployMessages.LaunchExecutor
-import org.apache.spark.deploy.DeployMessages.RegisterWorkerFailed
-import org.apache.spark.deploy.DeployMessages.RegisterWorkerFailed
-import org.apache.spark.deploy.DeployMessages.RegisteredWorker
+
 import org.apache.spark.deploy.master.DriverState.DriverState
 import org.apache.spark.deploy._
 import org.apache.spark.deploy.master.MasterMessages.{CompleteRecovery, ElectedLeader, CheckForWorkerTimeOut}
@@ -200,6 +198,59 @@ private[spark] class Master(
       }
     }
 
+    case RequestSubmitDriver(description) =>
+      if(state != RecoveryState.ALIVE){
+        val msg = s"Can only accept driver submissions in ALIVE state. Current state: $state."
+        sender ! SubmitDriverResponse(false, None, msg)
+      }else{
+        logInfo("Driver sumitted" + description.command.mainClass)
+        val driver = createDriver(description)
+        persistenceEngine.addDriver(driver)
+        waitingDrivers += driver
+        drivers.add(driver)
+        schedule()
+
+        // TODO: It might be good to instead have the submission client poll the master to determine
+        //       the current status of the driver. For now it's simply "fire and forget".
+
+        sender ! SubmitDriverResponse(true, Some(driver.id),
+          s"Driver successfully submitted as ${driver.id}")
+      }
+
+    case RequestDriverStatus(driverId) =>
+      (drivers ++ completedDrivers).find(_.id == driverId) match {
+        case Some(driver) =>
+          sender ! DriverStatusResponse(found = true, Some(driver.state),
+            driver.worker.map(_.id), driver.worker.map(_.hostPort), driver.exception)
+        case None =>
+          sender ! DriverStatusResponse(found = false, None, None, None, None)
+      }
+
+    case RegisterApplication(description) =>
+      if(state == RecoveryState.STANDBY){
+        //do nothing
+      }else{
+        logInfo("register app " + description.name)
+        //在这里 确认driver是谁
+        val app = createApplication(description, sender)
+        registerApplication(app)
+        logInfo("register app" + description.name + " with id " + app.id)
+        persistenceEngine.addApplication(app)
+        sender ! RegisteredApplication(app.id, masterUrl)
+        schedule()
+      }
+
+    case ExecutorStateChanged(appId, execId, state, message, exitStatus) =>
+      val execOption = idToApp.get(appId).flatMap(app => app.executors.get(execId))
+      execOption match {
+        case Some(exec) =>
+          exec.state = state
+          exec.application.driver ! ExecutorUpdated(execId, state, message, exitStatus)
+          if(ExecutorState.isFinished(state)){
+
+          }
+      }
+
     case Heartbeat(workerId) =>
       idToWorker.get(workerId) match {
         case Some(workerInfo) =>
@@ -386,6 +437,7 @@ private[spark] class Master(
 
   def registerApplication(app: ApplicationInfo): Unit = {
     val appAddress = app.driver.path.address
+    //todo ??? 为啥判断addressToworker？什么时候删除？什么时候添加的？下面没有啊
     if (addressToWorker.contains(appAddress)) {
       logInfo("Attempted to re-register application at same address: " + appAddress)
       return
@@ -397,6 +449,18 @@ private[spark] class Master(
     actorToApp(app.driver) = app
     addressToApp(appAddress) = app
     waitingApps += app
+  }
+
+  def newDriverId(submitDate:Date):String = {
+    val appId = "driver-%s-%04d".format(createDateFormat.format(submitDate), nextDriverNumber)
+    nextDriverNumber += 1
+    appId
+  }
+
+  def createDriver(desc:DriverDescription):DriverInfo = {
+    val now = System.currentTimeMillis()
+    val date = new Date(now)
+    new DriverInfo(now, newDriverId(date), desc, date)
   }
 
   def launchDriver(worker: WorkerInfo, driver: DriverInfo): Unit = {
@@ -422,6 +486,19 @@ private[spark] class Master(
     }
   }
 
+  /** Generate a new app ID given a app's submission date */
+  def newApplicationId(submitDate:Date):String = {
+    val appId = "app-%s-%04d".format(createDateFormat.format(submitDate), nextAppNumber)
+    nextAppNumber += 1
+    appId
+  }
+
+  def createApplication(desc:ApplicationDescription, driver:ActorRef):ApplicationInfo = {
+    val now = System.currentTimeMillis()
+    val date = new Date(now)
+    new ApplicationInfo(now, newApplicationId(date), desc, date, driver, defaultCores)
+  }
+
   /**
    * Can an app use the given worker? True if the worker has enough memory and we haven't already
    * launched an executor for the app on it (right now the standalone backend doesn't like having
@@ -431,7 +508,6 @@ private[spark] class Master(
     worker.memoryFree >= app.desc.memoryPerSlave && !worker.hasExecutor(app)
   }
 
-  //todo schedule实现
   /**
    * Schedule the currently available resources among waiting apps. This method will be called
    * every time a new app joins or resource availability changes.
@@ -474,7 +550,23 @@ private[spark] class Master(
         for (pos <- 0 until numUseable) {
           if (assigned(pos) > 0) {
             val exec = app.addExecutor(useableWorkers(pos), assigned(pos))
-
+            launchExecutor(useableWorkers(pos), exec)
+            app.state = ApplicationState.RUNNING
+          }
+        }
+      }
+    }else{
+      //这里没有去判断是否已经运行application了
+      for(worker <- workers if worker.coresFree > 0 && worker.state == WorkerState.ALIVE) {
+        for(app <- waitingApps if app.coresLeft > 0){
+          //在这里判断的。。靠
+          if(canUse(app, worker)){
+            val coresToUse = math.min(worker.coresFree, app.coresLeft)
+            if(coresToUse > 0){
+              val exec = app.addExecutor(worker, coresToUse)
+              launchExecutor(worker, exec)
+              app.state = ApplicationState.RUNNING
+            }
           }
         }
       }

@@ -53,6 +53,11 @@ private[spark] class WorkerInfo(
     lastHeartbeat = System.currentTimeMillis()
   }
 
+  def hostPort: String = {
+    assert (port > 0)
+    host + ":" + port
+  }
+
   def setState(state:WorkerState.Value): Unit ={
     this.state = state
   }
