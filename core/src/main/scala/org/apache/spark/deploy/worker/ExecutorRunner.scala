@@ -50,7 +50,6 @@ private[spark] class ExecutorRunner(
     Runtime.getRuntime.addShutdownHook(shutdownHook)
   }
 
-  //todo 实现 fetchAndRunExecutor
   def fetchAndRunExecutor(): Unit ={
     try{
       // Create the executor's working directory

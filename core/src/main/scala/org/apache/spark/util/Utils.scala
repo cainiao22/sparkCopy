@@ -13,6 +13,7 @@ import scala.collection.Map
 import scala.collection.mutable.ArrayBuffer
 import scala.io.Source
 import scala.util.Try
+import scala.util.control.ControlThrowable
 
 /**
  * Created by Administrator on 2017/5/23.
@@ -398,6 +399,18 @@ private[spark] object Utils extends Logging {
     if(closeStreams){
       in.close()
       out.close()
+    }
+  }
+
+  def logUncaughtExceptions[T](f: => T): T = {
+    try{
+      f
+    }catch {
+      case ct:ControlThrowable =>
+        throw ct
+      case t:Throwable =>
+        logError(s"Uncaught exception in thread ${Thread.currentThread().getName}", t)
+        throw t
     }
   }
 }
