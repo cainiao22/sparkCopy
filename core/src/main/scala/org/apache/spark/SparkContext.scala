@@ -3,10 +3,11 @@ package org.apache.spark
 
 import java.util.UUID
 
+import org.apache.spark.rdd.RDD
 import org.apache.spark.scheduler.{LiveListenerBus, SplitInfo}
 import org.apache.spark.util.Utils
 
-import scala.collection.{Map, Set}
+import scala.collection.{mutable, Map, Set}
 /**
  * Main entry point for Spark functionality. A SparkContext represents the connection to a Spark
  * cluster, and can be used to create RDDs, accumulators and broadcast variables on that cluster.
@@ -152,7 +153,16 @@ class SparkContext(config: SparkConf) extends Logging {
   // An asynchronous listener bus for Spark events
   private[spark] val listenerBus = new LiveListenerBus()
 
-  private[spark] val env = SparkEnv
+  //todo sparkEnv 实现
+  private[spark] val env = null
+
+  // Used to store a URL for each static file/jar together with the file's local timestamp
+  private[spark] val addedFiles = mutable.HashMap[String, Long]()
+  private[spark] val addedJars = mutable.HashMap[String, Long]()
+
+  // Keeps track of all persisted RDDs
+  private val persistentRdds = new TimeStampedWeakValueHashMap[Int, RDD[]]
+
 }
 
 object SparkContext extends Logging {
