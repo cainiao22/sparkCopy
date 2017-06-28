@@ -1,5 +1,7 @@
 package org.apache.spark.util
 
+import java.lang.ref.WeakReference
+
 import org.apache.spark.Logging
 
 import scala.collection.mutable
@@ -21,6 +23,8 @@ import scala.collection.mutable
 private[spark] class TimeStampedWeakValueHashMap[A, B](updateTimeStampOnGet:Boolean = false)
   extends mutable.Map[A, B] with Logging {
 
-  private val internalMap = new
+  private val internalMap = new TimeStampedHashMap[A, WeakReference[A]]()
+
+
 
 }
