@@ -66,6 +66,84 @@ private[spark] class TimeStampedHashMap[A, B](updateTimeStampOnGet: Boolean = fa
     newMap
   }
 
+  override def -(key:A):mutable.Map[A, B] = {
+    val newMap = new TimeStampedHashMap[A, B]()
+    newMap.internalMap.putAll(this.internalMap)
+    newMap.internalMap.remove(key)
+    newMap
+  }
+
+  override def += (kv:(A, B)):this.type = {
+    kv match {case (a, b) => internalMap.put(a, TimeStampedValue(b, currentTime))}
+    this
+  }
+
+  override def -= (key:A):this.type = {
+    internalMap.remove(key)
+    this
+  }
+
+  override def update(key:A, value:B):this.type = {
+    this += ((key, value))
+  }
+
+  override def apply(key:A):B = {
+    get(key).getOrElse(throw new NoSuchElementException)
+  }
+
+  override def filter(p:((A, B)) => Boolean):mutable.Map[A, B] = {
+    JavaConversions.mapAsScalaConcurrentMap(internalMap)
+      .map{case (k, TimeStampedValue(v)) => (k, v)}.filter(p)
+  }
+
+  override def empty:mutable.Map[A, B] = new TimeStampedHashMap[A, B]()
+
+  override def size():Int = internalMap.size()
+
+  override def foreach[U](f:((A, B)) => U) {
+    val it = getEntrySet.iterator()
+    while(it.hasNext){
+      val entry = it.next()
+      val kv = (entry.getKey, entry.getValue.value)
+      f(kv)
+    }
+  }
+
+  def putIfAbsent(key:A, value:B):Option[B] = {
+    val pre = internalMap.putIfAbsent(key, TimeStampedValue(value, currentTime))
+    Option(pre).map(_.value)
+  }
+
+  def putAll(map:Map[A, B]): Unit ={
+    map.foreach{case (k, v) => update(k, v)}
+  }
+
+  def toMap:Map[A, B] = iterator.toMap
+
+  def clearOldValues(threshTime:Long, f:(A, B) => Unit): Unit ={
+    val it = getEntrySet.iterator()
+    while(it.hasNext){
+      val entry = it.next()
+      if(entry.getValue.timestamp < threshTime){
+        f(entry.getKey, entry.getValue.value)
+        logDebug("removing key " + entry.getKey)
+        it.remove()
+      }
+    }
+  }
+
+  def clearOldValues(threshTime:Long): Unit ={
+    clearOldValues(threshTime, (_, _) => ())
+  }
+
   private def currentTime: Long = System.currentTimeMillis
+
+  def getTimeStampedValue(key:A):Option[TimeStampedValue[B]] = {
+    Option(internalMap.get(key))
+  }
+
+  def getTimeStamp(key:A):Option[Long] = {
+    getTimeStampedValue(key).map(_.timestamp)
+  }
 
 }
