@@ -5,7 +5,7 @@ import java.util.UUID
 
 import org.apache.spark.rdd.RDD
 import org.apache.spark.scheduler.{LiveListenerBus, SplitInfo}
-import org.apache.spark.util.Utils
+import org.apache.spark.util.{MetadataCleanerType, MetadataCleaner, TimeStampedWeakValueHashMap, Utils}
 
 import scala.collection.{mutable, Map, Set}
 /**
@@ -161,8 +161,23 @@ class SparkContext(config: SparkConf) extends Logging {
   private[spark] val addedJars = mutable.HashMap[String, Long]()
 
   // Keeps track of all persisted RDDs
-  private val persistentRdds = new TimeStampedWeakValueHashMap[Int, RDD[]]
+  private[spark] val persistentRdds = new TimeStampedWeakValueHashMap[Int, RDD[_]]
+  private[spark] val metadataCleaner =
+    new MetadataCleaner(MetadataCleanerType.SPARK_CONTEXT, this.cleanup, conf)
 
+  //todo Initialize the Spark UI, registering all associated listeners
+
+  /** A default Hadoop Configuration for the Hadoop code (e.g. file systems) that we reuse. */
+  val hadoopConfiguration = {
+    val env = SparkE
+  }
+
+
+
+  private[spark] def cleanup(cleanupTime:Long): Unit ={
+    //定时删除过时的缓存rdd
+    persistentRdds.clearOldValues(cleanupTime)
+  }
 }
 
 object SparkContext extends Logging {
