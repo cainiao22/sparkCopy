@@ -169,7 +169,7 @@ class SparkContext(config: SparkConf) extends Logging {
 
   /** A default Hadoop Configuration for the Hadoop code (e.g. file systems) that we reuse. */
   val hadoopConfiguration = {
-    val env = SparkE
+    val env = SparkEnv.get()
   }
 
 
