@@ -3,6 +3,7 @@ package org.apache.spark
 
 import java.util.UUID
 
+import org.apache.spark.deploy.SparkHadoopUtil
 import org.apache.spark.rdd.RDD
 import org.apache.spark.scheduler.{LiveListenerBus, SplitInfo}
 import org.apache.spark.util.{MetadataCleanerType, MetadataCleaner, TimeStampedWeakValueHashMap, Utils}
@@ -169,7 +170,29 @@ class SparkContext(config: SparkConf) extends Logging {
 
   /** A default Hadoop Configuration for the Hadoop code (e.g. file systems) that we reuse. */
   val hadoopConfiguration = {
-    val env = SparkE
+    val env = SparkEnv.get
+    val hadoopConf = SparkHadoopUtil.get.newConfiguration()
+    // Explicitly check for S3 environment variables
+    if (System.getenv("AWS_ACCESS_KEY_ID") != null &&
+      System.getenv("AWS_SECRET_ACCESS_KEY") != null) {
+      hadoopConf.set("fs.s3.awsAccessKeyId", System.getenv("AWS_ACCESS_KEY_ID"))
+      hadoopConf.set("fs.s3n.awsAccessKeyId", System.getenv("AWS_ACCESS_KEY_ID"))
+      hadoopConf.set("fs.s3.awsSecretAccessKey", System.getenv("AWS_SECRET_ACCESS_KEY"))
+      hadoopConf.set("fs.s3n.awsSecretAccessKey", System.getenv("AWS_SECRET_ACCESS_KEY"))
+    }
+
+    conf.getAll().foreach{case (k, v) =>
+      if(k.startsWith("spark.hadoop.")){
+        hadoopConf.set(k.substring("spark.hadoop.".length), v)
+      }
+    }
+    val buffersize = conf.get("spark.buffer.size", "65536")
+    hadoopConf.set("io.file.buffer.size", buffersize)
+    hadoopConf
+  }
+
+  private[spark] val eventLogger:Option[EventLoggingListener] = {
+
   }
 
 

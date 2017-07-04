@@ -6,3 +6,21 @@ package org.apache.spark
 class SparkEnv {
 
 }
+
+object SparkEnv extends Logging {
+  private val env = new ThreadLocal[SparkEnv]
+  @volatile private var lastSetSparkEnv: SparkEnv = _
+
+  def set(e:SparkEnv): Unit ={
+    lastSetSparkEnv = e
+    env.set(e)
+  }
+
+  /**
+   * Returns the ThreadLocal SparkEnv, if non-null. Else returns the SparkEnv
+   * previously set in any thread.
+   */
+  def get:SparkEnv = {
+    Option(env.get()).getOrElse(lastSetSparkEnv)
+  }
+}
