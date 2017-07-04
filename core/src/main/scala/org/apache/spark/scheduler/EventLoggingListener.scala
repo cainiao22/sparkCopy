@@ -1,8 +1,13 @@
 package org.apache.spark.scheduler
 
 import org.apache.hadoop.conf.Configuration
+import org.apache.hadoop.fs.permission.FsPermission
+import org.apache.spark.util.FileLogger
 import org.apache.spark.{Logging, SparkConf}
 import org.apache.spark.deploy.SparkHadoopUtil
+import org.json4s.JsonAST.JValue
+
+import scala.collection.mutable.ArrayBuffer
 
 /**
  * A SparkListener that logs events to persistent storage.
@@ -19,7 +24,31 @@ private[spark] class EventLoggingListener(
                                          sparkConf:SparkConf,
                                          hadoopConf:Configuration = SparkHadoopUtil.get.newConfiguration()
                                            ) extends SparkListener with Logging {
+  import EventLoggingListener._
+  private val shouldCompress = sparkConf.getBoolean("spark.eventLog.compress", false)
+  private val shouldOverwrite = sparkConf.getBoolean("spark.eventLog.overwrite", false)
+  private val testing = sparkConf.getBoolean("spark.eventLog.testing", false)
+  private val outputBufferSize = sparkConf.getInt("spark.eventLog.buffer.kb", 100) * 1024
+  private val logBaseDir = sparkConf.get("spark.eventLog.dir", DEFAULT_LOG_DIR).stripSuffix("/")
+  private val name = appName.replaceAll("[:/]", "-").toLowerCase + "-" + System.currentTimeMillis()
+  val logDir = logBaseDir + "/" + name
+
+  protected val logger = new FileLogger(logDir, sparkConf, hadoopConf, outputBufferSize,
+    shouldCompress, shouldCompress, Some(LOG_FILE_PERMISSIONS))
+
+  private[scheduler] val loggedEvents = new ArrayBuffer[JValue]
+
+  def start(): Unit ={
+
+  }
 
 
+}
 
+private[spark] object EventLoggingListener {
+  val DEFAULT_LOG_DIR = "/tmp/spark-events"
+  val LOG_PREFIX = "EVENT_LOG_"
+  val SPARK_VERSION_PREFIX = "SAPRK_VERSION_"
+
+  val LOG_FILE_PERMISSIONS = FsPermission.createImmutable(Integer.parseInt("770", 8).toShort)
 }

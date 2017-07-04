@@ -5,7 +5,7 @@ import java.util.UUID
 
 import org.apache.spark.deploy.SparkHadoopUtil
 import org.apache.spark.rdd.RDD
-import org.apache.spark.scheduler.{LiveListenerBus, SplitInfo}
+import org.apache.spark.scheduler.{EventLoggingListener, LiveListenerBus, SplitInfo}
 import org.apache.spark.util.{MetadataCleanerType, MetadataCleaner, TimeStampedWeakValueHashMap, Utils}
 
 import scala.collection.{mutable, Map, Set}
@@ -192,7 +192,12 @@ class SparkContext(config: SparkConf) extends Logging {
   }
 
   private[spark] val eventLogger:Option[EventLoggingListener] = {
-
+    if(conf.getBoolean("spark.eventLog.enabled", false)){
+      val logger = new EventLoggingListener(appName, conf, hadoopConfiguration)
+      logger.start()
+      listenerBus.addListener(logger)
+      Some(logger)
+    }else None
   }
 
 

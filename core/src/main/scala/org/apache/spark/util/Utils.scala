@@ -5,6 +5,8 @@ import java.net.{InetAddress, Inet4Address, NetworkInterface, URI, URL, URLConne
 import java.util.Locale
 
 import org.apache.commons.lang3.SystemUtils
+import org.apache.hadoop.fs.FileSystem
+import org.apache.spark.deploy.SparkHadoopUtil
 import org.apache.spark.{SparkException, Logging}
 import org.apache.spark.executor.ExecutorUncaughtExceptionHandler
 
@@ -412,5 +414,12 @@ private[spark] object Utils extends Logging {
         logError(s"Uncaught exception in thread ${Thread.currentThread().getName}", t)
         throw t
     }
+  }
+
+  /**
+   * Return a Hadoop FileSystem with the scheme encoded in the given path.
+   */
+  def getHadoopFileSystem(path:URI):FileSystem = {
+    FileSystem.get(path, SparkHadoopUtil.get.newConfiguration())
   }
 }
