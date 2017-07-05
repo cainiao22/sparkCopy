@@ -2,6 +2,7 @@ package org.apache.spark.scheduler
 
 import org.apache.hadoop.conf.Configuration
 import org.apache.hadoop.fs.permission.FsPermission
+import org.apache.spark.io.CompressionCodec
 import org.apache.spark.util.FileLogger
 import org.apache.spark.{Logging, SparkConf}
 import org.apache.spark.deploy.SparkHadoopUtil
@@ -39,7 +40,14 @@ private[spark] class EventLoggingListener(
   private[scheduler] val loggedEvents = new ArrayBuffer[JValue]
 
   def start(): Unit ={
+    //仅仅是创建了一个日志目录
+    logger.start()
+    logInfo("Logging events to %s".format(logDir))
+    if(shouldCompress){
+      val codec = sparkConf.get("spark.io.compression.codec", CompressionCodec.DEFAULT_COMPRESSION_CODEC)
+      logger.newFile(COMPRESSION_CODEC_PREFIX + codec)
 
+    }
   }
 
 
@@ -49,6 +57,6 @@ private[spark] object EventLoggingListener {
   val DEFAULT_LOG_DIR = "/tmp/spark-events"
   val LOG_PREFIX = "EVENT_LOG_"
   val SPARK_VERSION_PREFIX = "SAPRK_VERSION_"
-
+  val COMPRESSION_CODEC_PREFIX = "COMPRESSION_CODEC_"
   val LOG_FILE_PERMISSIONS = FsPermission.createImmutable(Integer.parseInt("770", 8).toShort)
 }
