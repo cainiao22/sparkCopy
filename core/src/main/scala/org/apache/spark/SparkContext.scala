@@ -200,6 +200,15 @@ class SparkContext(config: SparkConf) extends Logging {
     }else None
   }
 
+  // At this point, all relevant SparkListeners have been registered, so begin releasing events
+  listenerBus.start()
+
+  val startTime = System.currentTimeMillis()
+
+  if(jars != null){
+    jars.foreach()
+  }
+
 
 
   private[spark] def cleanup(cleanupTime:Long): Unit ={
@@ -209,6 +218,8 @@ class SparkContext(config: SparkConf) extends Logging {
 }
 
 object SparkContext extends Logging {
+
+  private[spark] val SPARK_VERSION = "1.0.0"
 
   private[spark] def updatedConf(
                                conf: SparkConf,

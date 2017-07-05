@@ -4,7 +4,7 @@ import org.apache.hadoop.conf.Configuration
 import org.apache.hadoop.fs.permission.FsPermission
 import org.apache.spark.io.CompressionCodec
 import org.apache.spark.util.FileLogger
-import org.apache.spark.{Logging, SparkConf}
+import org.apache.spark.{SparkContext, Logging, SparkConf}
 import org.apache.spark.deploy.SparkHadoopUtil
 import org.json4s.JsonAST.JValue
 
@@ -46,8 +46,9 @@ private[spark] class EventLoggingListener(
     if(shouldCompress){
       val codec = sparkConf.get("spark.io.compression.codec", CompressionCodec.DEFAULT_COMPRESSION_CODEC)
       logger.newFile(COMPRESSION_CODEC_PREFIX + codec)
-
     }
+    logger.newFile(SPARK_VERSION_PREFIX + SparkContext.SPARK_VERSION)
+    logger.newFile(LOG_PREFIX + logger.fileIndex)
   }
 
 
