@@ -1,9 +1,19 @@
 package org.apache.spark
 
+import akka.actor.ActorSystem
+
 /**
- * Created by Administrator on 2017/6/26.
+ * :: DeveloperApi ::
+ * Holds all the runtime environment objects for a running Spark instance (either master or worker),
+ * including the serializer, Akka actor system, block manager, map output tracker, etc. Currently
+ * Spark code finds the SparkEnv through a thread-local variable, so each thread that accesses these
+ * objects needs to have the right SparkEnv set. You can get the current environment with
+ * SparkEnv.get (e.g. after creating a SparkContext) and set it with SparkEnv.set.
+ *
+ * NOTE: This is not intended for external use. This is exposed for Shark and may be made private
+ *       in a future release.
  */
-class SparkEnv() {
+class SparkEnv(val httpFileServer: HttpFileServer) {
 
 }
 

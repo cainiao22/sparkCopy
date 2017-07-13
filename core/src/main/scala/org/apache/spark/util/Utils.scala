@@ -2,7 +2,7 @@ package org.apache.spark.util
 
 import java.io.{OutputStream, InputStream, IOException, File}
 import java.net.{InetAddress, Inet4Address, NetworkInterface, URI, URL, URLConnection}
-import java.util.Locale
+import java.util.{UUID, Locale}
 
 import org.apache.commons.lang3.SystemUtils
 import org.apache.hadoop.fs.FileSystem
@@ -421,5 +421,58 @@ private[spark] object Utils extends Logging {
    */
   def getHadoopFileSystem(path:URI):FileSystem = {
     FileSystem.get(path, SparkHadoopUtil.get.newConfiguration())
+  }
+
+
+  // Note: if file is child of some registered path, while not equal to it, then return true;
+  // else false. This is to ensure that two shutdown hooks do not try to delete each others
+  // paths - resulting in IOException and incomplete cleanup.
+  def hasRootAsShutdownDeleteDir(dir:File):Boolean = {
+    val absolutPath = dir.getAbsolutePath
+    val retval = shutdownDeletePaths.synchronized{
+      shutdownDeletePaths.exists{ path =>
+        !absolutPath.equals(path) && absolutPath.startsWith(path)
+      }
+    }
+
+    if (retval) {
+      logInfo("path = " + absolutPath + ", already present as root for deletion.")
+    }
+    retval
+  }
+
+  def createTempDir(root:String = System.getProperty("java.io.tmpdir")):File = {
+    var attempts = 0
+    val maxAttempts = 10
+    var dir:File = null
+    while(dir == null){
+      attempts += 1
+      if(attempts > maxAttempts){
+        throw new IOException("Failed to create a temp directory (under " + root + ") after " +
+          maxAttempts + " attempts!")
+      }
+      try{
+        dir = new File(root, "spark-" + UUID.randomUUID().toString)
+        if(dir.exists() || !dir.mkdirs()){
+          dir = null
+        }
+      }catch { case e: SecurityException => dir = null; }
+    }
+
+    registerShutdownDeleteDir(dir)
+    Runtime.getRuntime.addShutdownHook(new Thread("delete Spark temp dir " + dir){
+      override def run(): Unit ={
+        // Attempt to delete if some patch which is parent of this is not already registered.
+        if (! hasRootAsShutdownDeleteDir(dir)) Utils.deleteRecursively(dir)
+      }
+    })
+  }
+  private val shutdownDeletePaths = new scala.collection.mutable.HashSet[String]()
+
+  def registerShutdownDeleteDir(file:File): Unit ={
+    val absolutePath = file.getAbsolutePath
+    synchronized{
+      shutdownDeletePaths += absolutePath
+    }
   }
 }

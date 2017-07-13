@@ -1,27 +1,31 @@
 package org.apache.spark
 
 
+import java.io.File
+import java.net.URI
 import java.util.UUID
 
+import org.apache.hadoop.fs.Path
 import org.apache.spark.deploy.SparkHadoopUtil
 import org.apache.spark.rdd.RDD
 import org.apache.spark.scheduler.{EventLoggingListener, LiveListenerBus, SplitInfo}
 import org.apache.spark.util.{MetadataCleanerType, MetadataCleaner, TimeStampedWeakValueHashMap, Utils}
 
 import scala.collection.{mutable, Map, Set}
+
 /**
  * Main entry point for Spark functionality. A SparkContext represents the connection to a Spark
  * cluster, and can be used to create RDDs, accumulators and broadcast variables on that cluster.
  *
  * @param config a Spark Config object describing the application configuration. Any settings in
- *   this config overrides the default configs as well as system properties.
+ *               this config overrides the default configs as well as system properties.
  */
 class SparkContext(config: SparkConf) extends Logging {
 
   // This is used only by YARN for now, but should be relevant to other cluster types (Mesos,
   // etc) too. This is typically generated from InputFormatInfo.computePreferredLocations. It
   // contains a map from hostname to a list of input format splits on the host.
-  private var preferredNodeLocationData:Map[String, Set[SplitInfo]] = Map()
+  private var preferredNodeLocationData: Map[String, Set[SplitInfo]] = Map()
 
   /**
    * Create a SparkContext that loads settings from system properties (for instance, when
@@ -34,10 +38,10 @@ class SparkContext(config: SparkConf) extends Logging {
    * Alternative constructor for setting preferred locations where Spark will create executors.
    *
    * @param preferredNodeLocationData used in YARN mode to select nodes to launch containers on. Ca
-   * be generated using [[org.apache.spark.scheduler.InputFormatInfo.computePreferredLocations]]
-   * from a list of input files or InputFormats for the application.
+   *                                  be generated using [[org.apache.spark.scheduler.InputFormatInfo.computePreferredLocations]]
+   *                                  from a list of input files or InputFormats for the application.
    */
-  def this(config:SparkConf, preferredNodeLocationData:Map[String, Set[SplitInfo]]) = {
+  def this(config: SparkConf, preferredNodeLocationData: Map[String, Set[SplitInfo]]) = {
     this(config)
     this.preferredNodeLocationData = preferredNodeLocationData
   }
@@ -49,7 +53,7 @@ class SparkContext(config: SparkConf) extends Logging {
    * @param appName A name for your application, to display on the cluster web UI
    * @param conf a [[org.apache.spark.SparkConf]] object specifying other Spark parameters
    */
-  def this(master:String, appName:String, conf:SparkConf) = {
+  def this(master: String, appName: String, conf: SparkConf) = {
     this(SparkContext.updatedConf(conf, master, appName))
   }
 
@@ -69,8 +73,7 @@ class SparkContext(config: SparkConf) extends Logging {
             sparkHome: String = null,
             jars: Seq[String] = Nil,
             environment: Map[String, String] = Map(),
-            preferredNodeLocationData: Map[String, Set[SplitInfo]] = Map()) =
-  {
+            preferredNodeLocationData: Map[String, Set[SplitInfo]] = Map()) = {
     this(SparkContext.updatedConf(new SparkConf(), master, appName, sparkHome, jars, environment))
     this.preferredNodeLocationData = preferredNodeLocationData
   }
@@ -116,11 +119,11 @@ class SparkContext(config: SparkConf) extends Logging {
    */
   def getConf = config.clone
 
-  if(!conf.contains("spark.master")){
+  if (!conf.contains("spark.master")) {
     throw new SparkException("A master url must be set in your configuration")
   }
 
-  if(!conf.contains("spark.app.name")){
+  if (!conf.contains("spark.app.name")) {
     throw new SparkException("A appName url must be set in your configuration")
   }
 
@@ -133,10 +136,10 @@ class SparkContext(config: SparkConf) extends Logging {
   conf.setIfMissing("spark.driver.host", Utils.localHostName())
   conf.setIfMissing("spark.driver.port", "0")
 
-  val jars:Seq[String] =
+  val jars: Seq[String] =
     conf.getOption("spark.jars").map(_.split(",")).map(_.filter(_.size != 0)).toSeq.flatten
 
-  val files:Seq[String] =
+  val files: Seq[String] =
     conf.getOption("spark.files").map(_.split(",")).map(_.filter(_.size != 0)).toSeq.flatten
 
   val master = conf.get("spark.master")
@@ -149,13 +152,13 @@ class SparkContext(config: SparkConf) extends Logging {
 
   val isLocal = (master == "local" || master.startsWith("local["))
 
-  if(master == "yarn-client") System.setProperty("SPARK_YARN_MODE", "true")
+  if (master == "yarn-client") System.setProperty("SPARK_YARN_MODE", "true")
 
   // An asynchronous listener bus for Spark events
   private[spark] val listenerBus = new LiveListenerBus()
 
   //todo sparkEnv 实现
-  private[spark] val env = null
+  private[spark] val env: SparkEnv = null
 
   // Used to store a URL for each static file/jar together with the file's local timestamp
   private[spark] val addedFiles = mutable.HashMap[String, Long]()
@@ -181,8 +184,8 @@ class SparkContext(config: SparkConf) extends Logging {
       hadoopConf.set("fs.s3n.awsSecretAccessKey", System.getenv("AWS_SECRET_ACCESS_KEY"))
     }
 
-    conf.getAll().foreach{case (k, v) =>
-      if(k.startsWith("spark.hadoop.")){
+    conf.getAll().foreach { case (k, v) =>
+      if (k.startsWith("spark.hadoop.")) {
         hadoopConf.set(k.substring("spark.hadoop.".length), v)
       }
     }
@@ -191,13 +194,13 @@ class SparkContext(config: SparkConf) extends Logging {
     hadoopConf
   }
 
-  private[spark] val eventLogger:Option[EventLoggingListener] = {
-    if(conf.getBoolean("spark.eventLog.enabled", false)){
+  private[spark] val eventLogger: Option[EventLoggingListener] = {
+    if (conf.getBoolean("spark.eventLog.enabled", false)) {
       val logger = new EventLoggingListener(appName, conf, hadoopConfiguration)
       logger.start()
       listenerBus.addListener(logger)
       Some(logger)
-    }else None
+    } else None
   }
 
   // At this point, all relevant SparkListeners have been registered, so begin releasing events
@@ -205,13 +208,63 @@ class SparkContext(config: SparkConf) extends Logging {
 
   val startTime = System.currentTimeMillis()
 
-  if(jars != null){
-    jars.foreach()
+  if (jars != null) {
+    jars.foreach(addJar)
+  }
+
+  /**
+   * Adds a JAR dependency for all tasks to be executed on this SparkContext in the future.
+   * The `path` passed can be either a local file, a file in HDFS (or other Hadoop-supported
+   * filesystems), an HTTP, HTTPS or FTP URI, or local:/path for a file on every worker node.
+   */
+  def addJar(path: String): Unit = {
+    if (path == null) {
+      logWarning("null specified as parameter to addJar")
+      return
+    }
+    var key = ""
+    if (path.contains("\\")) {
+      // For local paths with backslashes on Windows, URI throws an exception
+      key = env.httpFileServer.addJar(new File(path))
+    } else {
+      val uri = new URI(path)
+      key = uri.getScheme match {
+        case "file" | null =>
+          if (SparkHadoopUtil.get.isYarnMode() &&
+            (master == "yarn-standalone" || master == "yarn-cluster")) {
+            // In order for this to work in yarn-cluster mode the user must specify the
+            // --addJars option to the client to upload the file into the distributed cache
+            // of the AM to make it show up in the current working directory.
+            val fileName = new Path(uri.getPath).getName()
+            try {
+              env.httpFileServer.addJar(new File(fileName))
+            } catch {
+              case e: Exception =>
+                // For now just log an error but allow to go through so spark examples work.
+                // The spark examples don't really need the jar distributed since its also
+                // the app jar.
+                logError("Error adding jar (" + e + "), was the --addJars option used?")
+                null
+            }
+          } else {
+            env.httpFileServer.addJar(new File(uri.getPath))
+          }
+        // A JAR file which exists locally on every worker node
+        case "local" =>
+          "file:" + uri.getPath
+        case _ =>
+          path
+      }
+    }
+
+    if(key != null){
+      addedJars(key) = System.currentTimeMillis()
+      logInfo("Added JAR " + path + " at " + key + " with timestamp " + addedJars(key))
+    }
   }
 
 
-
-  private[spark] def cleanup(cleanupTime:Long): Unit ={
+  private[spark] def cleanup(cleanupTime: Long): Unit = {
     //定时删除过时的缓存rdd
     persistentRdds.clearOldValues(cleanupTime)
   }
@@ -222,20 +275,20 @@ object SparkContext extends Logging {
   private[spark] val SPARK_VERSION = "1.0.0"
 
   private[spark] def updatedConf(
-                               conf: SparkConf,
-                               master:String,
-                               appName:String,
-                               sparkHome:String = null,
-                               jars:Seq[String] = Nil,
-                               environment:Map[String, String] = Map()
-                                 ):SparkConf = {
+                                  conf: SparkConf,
+                                  master: String,
+                                  appName: String,
+                                  sparkHome: String = null,
+                                  jars: Seq[String] = Nil,
+                                  environment: Map[String, String] = Map()
+                                  ): SparkConf = {
     val res = conf.clone
     res.setMaster(master)
     res.setAppName(appName)
-    if(sparkHome != null){
+    if (sparkHome != null) {
       res.setSparkHome(sparkHome)
     }
-    if(jars != null && !jars.isEmpty){
+    if (jars != null && !jars.isEmpty) {
       res.setJars(jars)
     }
     res.setExecutorEnv(environment.toSeq)
@@ -248,11 +301,11 @@ object SparkContext extends Logging {
    *
    * instance: jar:file:/D:/localRepository/org/apache/commons/commons-lang3/3.3.2/commons-lang3-3.3.2.jar!/org/apache/commons/lang3/StringUtils.class
    */
-  def jarOfClass(cls:Class[_]):Option[String] = {
+  def jarOfClass(cls: Class[_]): Option[String] = {
     val uri = cls.getResource("/" + cls.getName.replace('.', '/') + ".class")
-    if(uri != null){
+    if (uri != null) {
       val uriStr = uri.toString
-      if(uriStr.startsWith("jar:file:")){
+      if (uriStr.startsWith("jar:file:")) {
         return Some(uriStr.substring("jar:file:".length, uriStr.indexOf("!")))
       }
     }
@@ -264,5 +317,5 @@ object SparkContext extends Logging {
    * to pass their JARs to SparkContext. In most cases you can call jarOfObject(this) in
    * your driver program.
    */
-  def jarOfObject(obj:AnyRef):Option[String] = jarOfClass(obj.getClass)
+  def jarOfObject(obj: AnyRef): Option[String] = jarOfClass(obj.getClass)
 }

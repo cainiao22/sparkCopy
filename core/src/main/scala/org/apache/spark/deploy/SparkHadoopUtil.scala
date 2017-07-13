@@ -15,6 +15,12 @@ class SparkHadoopUtil extends Logging {
 
   def newConfiguration():Configuration = new Configuration()
 
+  def isYarnMode(): Boolean = { false }
+
+  def getSecretKeyFromUserCredentials(key: String): Array[Byte] = { null }
+
+  def addSecretKeyToUserCredentials(key: String, secret: String) {}
+
 }
 
 object SparkHadoopUtil {
