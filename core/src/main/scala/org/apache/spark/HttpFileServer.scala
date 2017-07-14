@@ -28,6 +28,11 @@ private[spark] class HttpFileServer(securityManager: SecurityManager) extends Lo
     serverUri = httpServer.uri
   }
 
+  def addFile(file: File):String = {
+    addFileToDir(file, fileDir)
+    serverUri + "/files/" + file.getName
+  }
+
   def addJar(file:File):String = {
     addFileToDir(file, jarDir)
     serverUri + "/jars/" + file.getName

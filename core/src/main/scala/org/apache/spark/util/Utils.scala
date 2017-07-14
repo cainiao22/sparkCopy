@@ -1,13 +1,14 @@
 package org.apache.spark.util
 
-import java.io.{OutputStream, InputStream, IOException, File}
+import java.io._
 import java.net.{InetAddress, Inet4Address, NetworkInterface, URI, URL, URLConnection}
 import java.util.{UUID, Locale}
 
+import com.google.common.io.Files
 import org.apache.commons.lang3.SystemUtils
-import org.apache.hadoop.fs.FileSystem
+import org.apache.hadoop.fs.{FileUtil, Path, FileSystem}
 import org.apache.spark.deploy.SparkHadoopUtil
-import org.apache.spark.{SparkException, Logging}
+import org.apache.spark.{SecurityManager, SparkConf, SparkException, Logging}
 import org.apache.spark.executor.ExecutorUncaughtExceptionHandler
 
 import scala.collection.JavaConversions._
@@ -21,6 +22,43 @@ import scala.util.control.ControlThrowable
  * Created by Administrator on 2017/5/23.
  */
 private[spark] object Utils extends Logging {
+
+
+  /**
+   * Convert a Java memory parameter passed to -Xmx (such as 300m or 1g) to a number of megabytes.
+   */
+  def memoryStringToMb(str: String): Int = {
+    val lower = str.toLowerCase
+    if (lower.endsWith("k")) {
+      (lower.substring(0, lower.length-1).toLong / 1024).toInt
+    } else if (lower.endsWith("m")) {
+      lower.substring(0, lower.length-1).toInt
+    } else if (lower.endsWith("g")) {
+      lower.substring(0, lower.length-1).toInt * 1024
+    } else if (lower.endsWith("t")) {
+      lower.substring(0, lower.length-1).toInt * 1024 * 1024
+    } else {// no suffix, so it's just a number in bytes
+      (lower.toLong / 1024 / 1024).toInt
+    }
+  }
+
+  /** Copy all data from an InputStream to an OutputStream */
+  def copyStream(in: InputStream, out: FileOutputStream, closeStreams: Boolean = false): Unit = {
+    val buf = new Array[Byte](8192)
+    var n = 0
+    while (n != -1) {
+      n = in.read(buf)
+      if (n != -1) {
+        out.write(buf, 0, n)
+      }
+    }
+
+    if (closeStreams) {
+      in.close()
+      out.close()
+    }
+  }
+
 
   /**
    * Whether the underlying operating system is Windows.
@@ -178,46 +216,46 @@ private[spark] object Utils extends Logging {
    * Execute a block of code that evaluates to Unit, forwarding any uncaught exceptions to the
    * default UncaughtExceptionHandler
    */
-  def tryOrExit(block : => Unit): Unit ={
-    try{
+  def tryOrExit(block: => Unit): Unit = {
+    try {
       block
-    }catch {
-      case e:Throwable => ExecutorUncaughtExceptionHandler.uncaughtException(e)
+    } catch {
+      case e: Throwable => ExecutorUncaughtExceptionHandler.uncaughtException(e)
     }
   }
 
 
-  def inShutdown():Boolean = {
-    try{
-      val hook = new Thread(){
-        override def run(){}
+  def inShutdown(): Boolean = {
+    try {
+      val hook = new Thread() {
+        override def run() {}
       }
       Runtime.getRuntime.addShutdownHook(hook)
       //这里会返回true表示移除成功， 但是这时候代表的是运行中
       Runtime.getRuntime.removeShutdownHook(hook)
-    }catch {
-      case ise:IllegalStateException => return true
+    } catch {
+      case ise: IllegalStateException => return true
     }
     false
   }
 
-  def megabytesToString(megabytes:Long):String = {
+  def megabytesToString(megabytes: Long): String = {
     bytesToString(megabytes * 1024L * 1024L)
   }
 
-  def bytesToString(size:Long):String = {
+  def bytesToString(size: Long): String = {
     val TB = 1 << 40
     val GB = 1 << 30
     val MB = 1 << 20
     val KB = 1 << 10
     val (value, unit) = {
-      if (size >= 2*TB) {
+      if (size >= 2 * TB) {
         (size.asInstanceOf[Double] / TB, "TB")
-      } else if (size >= 2*GB) {
+      } else if (size >= 2 * GB) {
         (size.asInstanceOf[Double] / GB, "GB")
-      } else if (size >= 2*MB) {
+      } else if (size >= 2 * MB) {
         (size.asInstanceOf[Double] / MB, "MB")
-      } else if (size >= 2*KB) {
+      } else if (size >= 2 * KB) {
         (size.asInstanceOf[Double] / KB, "KB")
       } else {
         (size.asInstanceOf[Double], "B")
@@ -226,9 +264,9 @@ private[spark] object Utils extends Logging {
     "%.1f %s".formatLocal(Locale.US, value, unit)
   }
 
-  private def listFilesSafely(file: File):Seq[File] = {
+  private def listFilesSafely(file: File): Seq[File] = {
     val files = file.listFiles()
-    if(files == null){
+    if (files == null) {
       throw new IOException("Failed to list files for dir: " + file)
     }
     files
@@ -238,16 +276,16 @@ private[spark] object Utils extends Logging {
    * Delete a file or directory and its contents recursively.
    * Don't follow directories if they are symlinks.
    */
-  def deleteRecursively(file:File): Unit ={
-    if(file != null){
-      if(file.isDirectory && !isSymlink(file)){
-        for(child <- file.listFiles()){
+  def deleteRecursively(file: File): Unit = {
+    if (file != null) {
+      if (file.isDirectory && !isSymlink(file)) {
+        for (child <- file.listFiles()) {
           deleteRecursively(child)
         }
       }
-      if(!file.delete()){
+      if (!file.delete()) {
         // Delete can also fail if the file simply did not exist
-        if(file.exists()){
+        if (file.exists()) {
           throw new IOException("Failed to delete: " + file.getAbsolutePath)
         }
       }
@@ -255,7 +293,7 @@ private[spark] object Utils extends Logging {
   }
 
   /**
-   *  Check to see if file is a symbolic link.
+   * Check to see if file is a symbolic link.
    */
   //todo ??? 怎么判断的？
   def isSymlink(file: File): Boolean = {
@@ -281,10 +319,10 @@ private[spark] object Utils extends Logging {
    */
   def findOldestFiles(dir: File, cutoff: Long): Seq[File] = {
     val currentTimeMillis = System.currentTimeMillis()
-    if(dir.isDirectory){
+    if (dir.isDirectory) {
       val files = listFilesSafely(dir)
-      files.filter{file => file.lastModified() < (currentTimeMillis - cutoff*1000)}
-    }else{
+      files.filter { file => file.lastModified() < (currentTimeMillis - cutoff * 1000) }
+    } else {
       throw new IllegalArgumentException(dir + " is not a directory!")
     }
   }
@@ -294,83 +332,83 @@ private[spark] object Utils extends Logging {
    * would do it to determine arguments to a command. For example, if the string is 'a "b c" d',
    * then it would be parsed as three arguments: 'a', 'b c' and 'd'.
    */
-  def splitCommandString(s:String):Seq[String] = {
+  def splitCommandString(s: String): Seq[String] = {
     val buf = new ArrayBuffer[String]()
     var inWord = false
     var inSingleQuote = false
     var inDoubleQuote = false
     val curWord = new StringBuilder
-    def endWord(): Unit ={
+    def endWord(): Unit = {
       buf += curWord.toString
       curWord.clear()
     }
 
     var i = 0;
-    while(i < s.length){
+    while (i < s.length) {
       val nextChar = s.charAt(i)
-      if(inDoubleQuote){
-        if(nextChar == '"'){
+      if (inDoubleQuote) {
+        if (nextChar == '"') {
           inDoubleQuote = false
-        }else if(nextChar == '\\'){
-          if(i < s.length - 1){
-            curWord.append(s.charAt(i+1))
+        } else if (nextChar == '\\') {
+          if (i < s.length - 1) {
+            curWord.append(s.charAt(i + 1))
             i += 1
           }
-        }else{
+        } else {
           curWord.append(nextChar)
         }
-      } else if(inSingleQuote) {
-        if(nextChar == '\''){
+      } else if (inSingleQuote) {
+        if (nextChar == '\'') {
           inSingleQuote = false
-        }else {
+        } else {
           curWord.append(nextChar)
         }
-      }else if(nextChar == '"'){
+      } else if (nextChar == '"') {
         inWord = true
         inDoubleQuote = true
-      }else if(nextChar == '\''){
+      } else if (nextChar == '\'') {
         inWord = true
         inSingleQuote = true
-      }else if(isSpace(nextChar)){
+      } else if (isSpace(nextChar)) {
         endWord()
         inWord = false
       }
       i += 1
     }
 
-    if(inWord || inSingleQuote || inDoubleQuote){
+    if (inWord || inSingleQuote || inDoubleQuote) {
       endWord()
     }
     buf
   }
 
-  def isSpace(c:Char):Boolean = {
+  def isSpace(c: Char): Boolean = {
     "\t\r\n".indexOf(c) != -1
   }
 
-  def excutaAndGetOutput(command:Seq[String], workDir:File = new File("."),
-                          extraEnvironment:Map[String, String] = Map.empty):String = {
+  def excutaAndGetOutput(command: Seq[String], workDir: File = new File("."),
+                         extraEnvironment: Map[String, String] = Map.empty): String = {
     val builder = new ProcessBuilder(command:_*)
       //工作目录：进行操作需要的资源，比如文件什么的，都会在这个目录进行查找
           .directory(workDir)
     val environment = builder.environment()
-    for((k, v) <- extraEnvironment){
+    for ((k, v) <- extraEnvironment) {
       environment.put(k, v)
     }
 
     val process = builder.start()
-    new Thread("read stderr for " + command(0)){
-      override def run(): Unit ={
-        for(line <- Source.fromInputStream(process.getErrorStream).getLines()){
+    new Thread("read stderr for " + command(0)) {
+      override def run(): Unit = {
+        for (line <- Source.fromInputStream(process.getErrorStream).getLines()) {
           System.err.println(line)
         }
       }
     }.start()
 
     val output = new StringBuffer
-    val stdoutThread = new Thread("read stdout for " + command(0)){
-      override def run: Unit ={
-        for(line <- Source.fromInputStream(process.getInputStream).getLines()){
+    val stdoutThread = new Thread("read stdout for " + command(0)) {
+      override def run: Unit = {
+        for (line <- Source.fromInputStream(process.getInputStream).getLines()) {
           output.append(line)
         }
       }
@@ -386,31 +424,31 @@ private[spark] object Utils extends Logging {
   }
 
   /** Copy all data from an InputStream to an OutputStream */
-  def coupStream(in:InputStream,
-                 out:OutputStream,
-                 closeStreams:Boolean = false): Unit ={
+  def coupStream(in: InputStream,
+                 out: OutputStream,
+                 closeStreams: Boolean = false): Unit = {
     val buf = new Array[Byte](8192)
     var n = 0
-    while(n != -1){
+    while (n != -1) {
       n = in.read(buf)
-      if(n != -1){
+      if (n != -1) {
         out.write(buf, 0, n)
       }
     }
 
-    if(closeStreams){
+    if (closeStreams) {
       in.close()
       out.close()
     }
   }
 
   def logUncaughtExceptions[T](f: => T): T = {
-    try{
+    try {
       f
-    }catch {
-      case ct:ControlThrowable =>
+    } catch {
+      case ct: ControlThrowable =>
         throw ct
-      case t:Throwable =>
+      case t: Throwable =>
         logError(s"Uncaught exception in thread ${Thread.currentThread().getName}", t)
         throw t
     }
@@ -419,7 +457,7 @@ private[spark] object Utils extends Logging {
   /**
    * Return a Hadoop FileSystem with the scheme encoded in the given path.
    */
-  def getHadoopFileSystem(path:URI):FileSystem = {
+  def getHadoopFileSystem(path: URI): FileSystem = {
     FileSystem.get(path, SparkHadoopUtil.get.newConfiguration())
   }
 
@@ -427,10 +465,10 @@ private[spark] object Utils extends Logging {
   // Note: if file is child of some registered path, while not equal to it, then return true;
   // else false. This is to ensure that two shutdown hooks do not try to delete each others
   // paths - resulting in IOException and incomplete cleanup.
-  def hasRootAsShutdownDeleteDir(dir:File):Boolean = {
+  def hasRootAsShutdownDeleteDir(dir: File): Boolean = {
     val absolutPath = dir.getAbsolutePath
-    val retval = shutdownDeletePaths.synchronized{
-      shutdownDeletePaths.exists{ path =>
+    val retval = shutdownDeletePaths.synchronized {
+      shutdownDeletePaths.exists { path =>
         !absolutPath.equals(path) && absolutPath.startsWith(path)
       }
     }
@@ -441,38 +479,196 @@ private[spark] object Utils extends Logging {
     retval
   }
 
-  def createTempDir(root:String = System.getProperty("java.io.tmpdir")):File = {
+  def createTempDir(root: String = System.getProperty("java.io.tmpdir")): File = {
     var attempts = 0
     val maxAttempts = 10
-    var dir:File = null
-    while(dir == null){
+    var dir: File = null
+    while (dir == null) {
       attempts += 1
-      if(attempts > maxAttempts){
+      if (attempts > maxAttempts) {
         throw new IOException("Failed to create a temp directory (under " + root + ") after " +
           maxAttempts + " attempts!")
       }
-      try{
+      try {
         dir = new File(root, "spark-" + UUID.randomUUID().toString)
-        if(dir.exists() || !dir.mkdirs()){
+        if (dir.exists() || !dir.mkdirs()) {
           dir = null
         }
-      }catch { case e: SecurityException => dir = null; }
+      } catch {
+        case e: SecurityException => dir = null;
+      }
     }
 
     registerShutdownDeleteDir(dir)
-    Runtime.getRuntime.addShutdownHook(new Thread("delete Spark temp dir " + dir){
-      override def run(): Unit ={
+    Runtime.getRuntime.addShutdownHook(new Thread("delete Spark temp dir " + dir) {
+      override def run(): Unit = {
         // Attempt to delete if some patch which is parent of this is not already registered.
-        if (! hasRootAsShutdownDeleteDir(dir)) Utils.deleteRecursively(dir)
+        if (!hasRootAsShutdownDeleteDir(dir)) Utils.deleteRecursively(dir)
       }
     })
+
+    dir
   }
+
   private val shutdownDeletePaths = new scala.collection.mutable.HashSet[String]()
 
-  def registerShutdownDeleteDir(file:File): Unit ={
+  def registerShutdownDeleteDir(file: File): Unit = {
     val absolutePath = file.getAbsolutePath
-    synchronized{
+    synchronized {
       shutdownDeletePaths += absolutePath
     }
+  }
+
+  /**
+   * Get a temporary directory using Spark's spark.local.dir property, if set. This will always
+   * return a single directory, even though the spark.local.dir property might be a list of
+   * multiple paths.
+   */
+  def getLocalDir(conf: SparkConf): String = {
+    conf.get("spark.local.dir", System.getProperty("java.io.tmpdir")).split(',')(0)
+  }
+
+  /**
+   * Download a file requested by the executor. Supports fetching the file in a variety of ways,
+   * including HTTP, HDFS and files on a standard filesystem, based on the URL parameter.
+   *
+   * Throws SparkException if the target file already exists and has different contents than
+   * the requested file.
+   */
+  def fetchFile(url: String, targetDir: File, conf: SparkConf, securityMgr: SecurityManager): Unit = {
+    val fileName = url.split("/").last
+    val tempDir = getLocalDir(conf)
+    val tempFile = File.createTempFile("sparkTempFile", null, new File(tempDir))
+    val targetFile = new File(targetDir, fileName)
+    val uri = new URI(url)
+    val overwrite = conf.getBoolean("spark.files.overwrite", false)
+    uri.getScheme match {
+      case "http" | "https" | "ftp" =>
+        logInfo("Fetching " + url + " to " + tempFile)
+        var uc: URLConnection = null
+
+        if (securityMgr.isAuthenticationEnabled()) {
+          val newuri = constructURIForAuthentication(uri, securityMgr)
+          uc = newuri.toURL.openConnection()
+          //不允许用户交互，类似于弹出对话框让用户填写用户名密码啥的
+          uc.setAllowUserInteraction(false)
+        } else {
+          uc = uri.toURL.openConnection()
+        }
+
+        val timeout = conf.getInt("spark.files.fetchTimeout", 60) * 1000
+        uc.setConnectTimeout(timeout)
+        uc.setReadTimeout(timeout)
+        uc.connect()
+        val in = uc.getInputStream
+        val out = new FileOutputStream(tempFile)
+        Utils.copyStream(in, out, true)
+        if (targetFile.exists() && Files.equal(targetFile, tempFile)) {
+          if (overwrite) {
+            targetFile.delete()
+            logInfo(("File %s exists and does not match contents of %s, " +
+              "replacing it with %s").format(targetFile, url, url))
+          } else {
+            tempFile.delete()
+            throw new SparkException(
+              "File " + targetFile + " exists and does not match contents of" + " " + url)
+          }
+        }
+        Files.move(tempFile, targetFile)
+      case "file" | null =>
+        // In the case of a local file, copy the local file to the target directory.
+        // Note the difference between uri vs url.
+        val sourceFile = if (uri.isAbsolute) new File(uri) else new File(url)
+        var shouldCopy = true
+        if (targetFile.exists()) {
+          if (!Files.equal(targetFile, sourceFile)) {
+            if (overwrite) {
+              targetFile.delete()
+              logInfo(("File %s exists and does not match contents of %s, " +
+                "replacing it with %s").format(targetFile, url, url))
+            } else {
+              throw new SparkException(
+                "File " + targetFile + " exists and does not match contents of" + " " + url)
+            }
+          } else {
+            // Do nothing if the file contents are the same, i.e. this file has been copied
+            // previously.
+            logInfo(sourceFile.getAbsolutePath + " has been previously copied to "
+              + targetFile.getAbsolutePath)
+            shouldCopy = false
+          }
+        }
+        if (shouldCopy) {
+          // The file does not exist in the target directory. Copy it there.
+          logInfo("Copying " + sourceFile.getAbsolutePath + " to " + targetFile.getAbsolutePath)
+          Files.copy(sourceFile, targetFile)
+        }
+
+      case _ =>
+        val fs = getHadoopFileSystem(uri)
+        val in = fs.open(new Path(uri))
+        val out = new FileOutputStream(tempFile)
+        Utils.copyStream(in, out, true)
+        if (targetFile.exists() && Files.equal(tempFile, targetFile)) {
+          if (overwrite) {
+            targetFile.delete()
+            logInfo(("File %s exists and does not match contents of %s, " +
+              "replacing it with %s").format(targetFile, url, url))
+          } else {
+            throw new SparkException(
+              "File " + targetFile + " exists and does not match contents of" + " " + url)
+          }
+        }
+
+        Files.move(tempFile, targetFile)
+        if (fileName.endsWith(".tar.gz") || fileName.endsWith(".tgz")) {
+          logInfo("Untarring " + fileName)
+          Utils.execute(Seq("tar", "-xzf", fileName), targetDir)
+        } else if (fileName.endsWith(".tar")) {
+          logInfo("Untarring " + fileName)
+          Utils.execute(Seq("tar", "-xf", fileName), targetDir)
+        }
+
+        // Make the file executable - That's necessary for scripts
+        FileUtil.chmod(targetFile.getAbsolutePath, "a+x")
+    }
+  }
+
+  /**
+   * Execute a command in the given working directory, throwing an exception if it completes
+   * with an exit code other than 0.
+   */
+  def execute(command: Seq[String], workingDir: File): Unit = {
+    val process = new ProcessBuilder(command: _*)
+      .directory(workingDir)
+      .redirectErrorStream(true)
+      .start()
+    new Thread("read stdout for " + command(0)) {
+      override def run(): Unit = {
+        for (line <- Source.fromInputStream(process.getInputStream).getLines()) {
+          System.err.println(line)
+        }
+      }
+    }.start()
+    val exitCode = process.waitFor()
+    if (exitCode != 0) {
+      throw new SparkException("Process " + command + " exited with code " + exitCode)
+    }
+  }
+
+  /**
+   * Construct a URI container information used for authentication.
+   * This also sets the default authenticator to properly negotiation the
+   * user/password based on the URI.
+   *
+   * Note this relies on the Authenticator.setDefault being set properly to decode
+   * the user name and password. This is currently set in the SecurityManager.
+   */
+  def constructURIForAuthentication(uri: URI, securityMgr: SecurityManager): URI = {
+    val userCred = securityMgr.getSecretKey()
+    if (userCred == null) throw new Exception("Secret key is null with authentication on")
+    val userInfo = securityMgr.getHttpUser() + ":" + userCred
+    new URI(uri.getScheme(), userInfo, uri.getHost(), uri.getPort(), uri.getPath(),
+      uri.getQuery(), uri.getFragment())
   }
 }

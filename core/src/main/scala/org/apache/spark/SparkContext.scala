@@ -212,6 +212,22 @@ class SparkContext(config: SparkConf) extends Logging {
     jars.foreach(addJar)
   }
 
+  if (files != null) {
+    files.foreach(addFile)
+  }
+
+  private def warnSparkMem(value: String): String = {
+    logWarning("Using SPARK_MEM to set amount of memory to use per executor process is " +
+      "deprecated, please use spark.executor.memory instead.")
+    value
+  }
+
+  private[spark] val executorMemory = conf.getOption("spark.executo.memory")
+    .orElse(Option(System.getenv("")))
+    .orElse(Option(System.getenv(""))).map(warnSparkMem)
+    .map(Utils.memoryStringToMb)
+    .getOrElse(512)
+
   /**
    * Adds a JAR dependency for all tasks to be executed on this SparkContext in the future.
    * The `path` passed can be either a local file, a file in HDFS (or other Hadoop-supported
@@ -257,10 +273,38 @@ class SparkContext(config: SparkConf) extends Logging {
       }
     }
 
-    if(key != null){
+    if (key != null) {
       addedJars(key) = System.currentTimeMillis()
       logInfo("Added JAR " + path + " at " + key + " with timestamp " + addedJars(key))
     }
+
+    postEnvironmentUpdate()
+  }
+
+  /**
+   * Add a file to be downloaded with this Spark job on every node.
+   * The `path` passed can be either a local file, a file in HDFS (or other Hadoop-supported
+   * filesystems), or an HTTP, HTTPS or FTP URI.  To access the file in Spark jobs,
+   * use `SparkFiles.get(path)` to find its download location.
+   */
+  def addFile(path: String): Unit = {
+    val uri = new URI(path)
+    val key = uri.getScheme match {
+      case null | "file" => env.httpFileServer.addFile(new File(uri.getPath))
+      case "local" => "file:" + uri.getPath
+      case _ => path
+    }
+
+    addedFiles(key) = System.currentTimeMillis()
+    Utils.fetchFile(path, new File(SparkFiles.getRootDirectory()), conf, env.securityManager)
+    logInfo("Added file " + path + " at " + key + " with timestamp " + addedFiles(key))
+    postEnvironmentUpdate()
+  }
+
+  /** Post the environment update event once the task scheduler is ready */
+  //todo 实现sparkEnv的更新
+  private def postEnvironmentUpdate(): Unit = {
+
   }
 
 
