@@ -136,6 +136,7 @@ class SparkConf(loadDefaults: Boolean) extends Cloneable with Logging {
     getOption(key).map(_.toBoolean).getOrElse(defaultValue)
   }
 
+  /** Get all executor environment variables set on this SparkConf */
   def getExecutorEnv:Seq[(String, String)] = {
     val prefix = "spark.executorEnv."
     getAll().filter{case (k, v) => k.startsWith(prefix)}.map{

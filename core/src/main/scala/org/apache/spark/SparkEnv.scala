@@ -14,6 +14,7 @@ import akka.actor.ActorSystem
  * in a future release.
  */
 class SparkEnv(
+                val mapOutputTracker: MapOutputTracker,
                 val httpFileServer: HttpFileServer,
                 val securityManager: SecurityManager,
                 val sparkFilesDir: String) {

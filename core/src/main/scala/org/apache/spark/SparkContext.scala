@@ -8,7 +8,8 @@ import java.util.UUID
 import org.apache.hadoop.fs.Path
 import org.apache.spark.deploy.SparkHadoopUtil
 import org.apache.spark.rdd.RDD
-import org.apache.spark.scheduler.{EventLoggingListener, LiveListenerBus, SplitInfo}
+import org.apache.spark.scheduler._
+import org.apache.spark.scheduler.cluster.SparkDeploySchedulerBackend
 import org.apache.spark.util.{MetadataCleanerType, MetadataCleaner, TimeStampedWeakValueHashMap, Utils}
 
 import scala.collection.{mutable, Map, Set}
@@ -228,6 +229,30 @@ class SparkContext(config: SparkConf) extends Logging {
     .map(Utils.memoryStringToMb)
     .getOrElse(512)
 
+  // Environment variables to pass to our executors.
+  private[spark] val executorEnvs = mutable.HashMap[String, String]()
+
+  // Convert java options to env vars as a work around
+  // since we can't set env vars directly in sbt.
+  for{(envKey, propKey) <- Seq(("SPARK.TESTING", "spark.test"))
+      value <- Option(System.getenv(envKey)).orElse(Option(System.getProperty(propKey)))}{
+    executorEnvs(envKey) = value
+  }
+
+  // The Mesos scheduler backend relies on this environment variable to set executor memory.
+  // TODO: Set this only in the Mesos scheduler.
+  executorEnvs("SPARK_EXECUTOR_MEMORY") = executorMemory + "m"
+  executorEnvs ++= conf.getExecutorEnv
+
+  // Set SPARK_USER for user who is running SparkContext.
+  val sparkUser = Option{
+    Option(System.getenv("SPARK_USER")).getOrElse(System.getProperty("user.name"))
+  }.getOrElse(SparkContext.SPARK_UNKNOWN_USER)
+
+  executorEnvs("SPARK_USER") = sparkUser
+
+  private[spark] taskScheduler = SparkContext.createTaskScheduler()
+
   /**
    * Adds a JAR dependency for all tasks to be executed on this SparkContext in the future.
    * The `path` passed can be either a local file, a file in HDFS (or other Hadoop-supported
@@ -318,6 +343,8 @@ object SparkContext extends Logging {
 
   private[spark] val SPARK_VERSION = "1.0.0"
 
+  private[spark] val SPARK_UNKNOWN_USER = "<unknown>"
+
   private[spark] def updatedConf(
                                   conf: SparkConf,
                                   master: String,
@@ -362,4 +389,35 @@ object SparkContext extends Logging {
    * your driver program.
    */
   def jarOfObject(obj: AnyRef): Option[String] = jarOfClass(obj.getClass)
+
+  /** Creates a task scheduler based on a given master URL. Extracted for testing. */
+  private def createTaskScheduler(sc: SparkContext, master: String): TaskScheduler = {
+    // Regular expression used for local[N] and local[*] master formats
+    val LOCAL_N_REGEX = """local\[([0-9\*]+)\]""".r
+    // Regular expression for local[N, maxRetries], used in tests with failing tasks
+    val LOCAL_N_FAILURES_REGEX = """local\[([0-9]+)\s*,\s*([0-9]+)\]""".r
+    // Regular expression for simulating a Spark cluster of [N, cores, memory] locally
+    val LOCAL_CLUSTER_REGEX = """local-cluster\[\s*([0-9]+)\s*,\s*([0-9]+)\s*,\s*([0-9]+)\s*]""".r
+    // Regular expression for connecting to Spark deploy clusters
+    val SPARK_REGEX = """spark://(.*)""".r
+    // Regular expression for connection to Mesos cluster by mesos:// or zk:// url
+    val MESOS_REGEX = """(mesos|zk)://.*""".r
+    // Regular expression for connection to Simr cluster
+    val SIMR_REGEX = """simr://(.*)""".r
+
+    // When running locally, don't try to re-execute tasks on failure.
+    val MAX_LOCAL_TASK_FAILURES = 1
+
+    master match {
+      case SPARK_REGEX(sparkUrl) =>
+        val scheduler = new TaskSchedulerImpl(sc)
+        val masterUrls = sparkUrl.split(",").map("spark://" + _)
+        val backend = new SparkDeploySchedulerBackend(scheduler, sc, masterUrls)
+        scheduler.initialize(backend)
+
+        scheduler
+    }
+
+
+  }
 }
