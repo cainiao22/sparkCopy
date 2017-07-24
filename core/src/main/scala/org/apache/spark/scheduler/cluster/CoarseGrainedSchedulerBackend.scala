@@ -1,5 +1,7 @@
 package org.apache.spark.scheduler.cluster
 
+import org.apache.spark.scheduler.SchedulerBackend
+
 /**
  * A scheduler backend that waits for coarse grained executors to connect to it through Akka.
  * This backend holds onto each executor for the duration of the Spark job rather than relinquishing
@@ -8,6 +10,6 @@ package org.apache.spark.scheduler.cluster
  * coarse-grained Mesos mode or standalone processes for Spark's standalone deploy mode
  * (spark.deploy.*).
  */
-private[spark] class CoarseGrainedSchedulerBackend {
+private[spark] class CoarseGrainedSchedulerBackend extends SchedulerBackend {
 
 }

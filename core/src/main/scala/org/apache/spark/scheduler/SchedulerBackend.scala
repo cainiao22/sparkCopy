@@ -6,5 +6,12 @@ package org.apache.spark.scheduler
  * machines become available and can launch tasks on them.
  */
 private[spark] trait SchedulerBackend {
+  /*def start():Unit
+  def stop():Unit
+  def reviveOffers():Unit
+  def defaultParallelism():Int
+
+  def killTask(taskId: Long, executorId: String, interruptThread: Boolean): Unit =
+    throw new UnsupportedOperationException*/
 
 }

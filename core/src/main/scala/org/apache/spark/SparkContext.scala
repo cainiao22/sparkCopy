@@ -251,7 +251,40 @@ class SparkContext(config: SparkConf) extends Logging {
 
   executorEnvs("SPARK_USER") = sparkUser
 
-  private[spark] taskScheduler = SparkContext.createTaskScheduler()
+  private[spark] var taskScheduler = SparkContext.createTaskScheduler(this, master)
+
+  @volatile private[spark] var dagScheduler:DAGScheduler = _
+
+  try{
+    dagScheduler = new DAGScheduler(this)
+  }catch {
+    case e: Exception => {
+      try {
+        stop()
+      } finally {
+        throw new SparkException("Error while constructing DAGScheduler", e)
+      }
+    }
+  }
+
+  /** Shut down the SparkContext. */
+  def stop(): Unit ={
+    postApplicationEnd()
+  }
+
+  /** Post the application end event */
+  def postApplicationEnd(): Unit ={
+    listenerBus.post(SparkListenerApplicationEnd(System.currentTimeMillis()))
+    //todo stop ui
+    //ui.stop
+    val dagSchedulerCopy = dagScheduler
+    dagScheduler = null
+    if(dagSchedulerCopy != null){
+      metadataCleaner.cancel()
+      cleaner
+    }
+  }
+
 
   /**
    * Adds a JAR dependency for all tasks to be executed on this SparkContext in the future.

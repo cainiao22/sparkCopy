@@ -91,6 +91,16 @@ private[spark] class TaskSchedulerImpl(val sc: SparkContext,
   def initialize(backend: SchedulerBackend): Unit = {
     this.backend = backend
     rootPool = new Pool("", schedulingMode, 0, 0)
+    schedulableBuilder = {
+      schedulingMode match {
+        case SchedulingMode.FIFO =>
+          new FIFOSchedulableBuilder(rootPool)
+        case SchedulingMode.FAIR =>
+          new FairSchedulableBuilder(rootPool, conf)
+      }
+    }
+
+    schedulableBuilder.buildPools()
   }
 
 
