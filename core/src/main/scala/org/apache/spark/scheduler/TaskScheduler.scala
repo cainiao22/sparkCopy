@@ -1,5 +1,7 @@
 package org.apache.spark.scheduler
 
+import org.apache.spark.scheduler.SchedulingMode.SchedulingMode
+
 /**
  * Low-level task scheduler interface, currently implemented exclusively by TaskSchedulerImpl.
  * This interface allows plugging in different task schedulers. Each TaskScheduler schedulers tasks
@@ -10,4 +12,9 @@ package org.apache.spark.scheduler
  */
 private[spark] trait TaskScheduler {
 
+  def rootPool:Pool
+
+  def schedulingMode:SchedulingMode
+
+  def start():Unit
 }

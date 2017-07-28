@@ -7,6 +7,8 @@ import org.apache.spark.scheduler.SchedulingMode.SchedulingMode
 import org.apache.spark._
 
 import scala.collection.mutable
+import scala.collection.mutable.ArrayBuffer
+import scala.util.Random
 
 /**
  * Schedules tasks for multiple types of clusters by acting through a SchedulerBackend.
@@ -104,4 +106,57 @@ private[spark] class TaskSchedulerImpl(val sc: SparkContext,
   }
 
 
+  override def start() = {
+    backend.start
+  }
+
+
+  /**
+   * Called by cluster manager to offer resources on slaves. We respond by asking our active task
+   * sets for tasks in order of priority. We fill each node with tasks in a round-robin manner so
+   * that tasks are balanced across the cluster.
+   */
+  def resourceOffers(offers:Seq[WorkerOffer]):Seq[Seq[TaskDescription]] = synchronized {
+    SparkEnv.set(sc.env)
+    // Mark each slave as alive and remember its hostname
+    for(o <- offers){
+      executorIdToHost(o.executorId) = o.host
+      if(executorsByHost.contains(o.host)){
+        executorsByHost(o.host) = new mutable.HashSet[String]
+        executorAdded(o.executorId, o.host)
+      }
+    }
+
+    // Randomly shuffle offers to avoid always placing tasks on the same set of workers.
+    val shuffledOffers = Random.shuffle(offers)
+    val tasks = shuffledOffers.map(o => new ArrayBuffer[TaskDescription](o.cores))
+    val availableCpus = shuffledOffers.map(_.cores).toArray
+    val sortedTaskSets = rootPool.getSortedTaskSetQueue()
+    for (taskSet <- sortedTaskSets) {
+      logDebug("parentName: %s, name: %s, runningTasks: %s".format(
+        taskSet.parent.name, taskSet.name, taskSet.runningTasks))
+    }
+
+    //Take each TaskSet in our scheduling order, and then offer it each node in increasing order
+    // of locality levels so that it gets a chance to launch local tasks on all of them.
+    //这里相当于双重循环，taskSet为外层，maxLocality为内层
+    var launchedTask = false
+    for(taskset <- sortedTaskSets; maxLocality <- TaskLocality){
+      do{
+        launchedTask = false
+        for(i <- 0 until shuffledOffers.size) {
+          val execId = shuffledOffers(i).executorId
+          val host = shuffledOffers(i).host
+          if(availableCpus(i) >= CPUS_PER_TASK){
+
+          }
+        }
+      }
+    }
+
+  }
+
+  def executorAdded(execId: String, host: String) {
+    dagScheduler.executorAdded(execId, host)
+  }
 }

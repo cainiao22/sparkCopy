@@ -1,6 +1,7 @@
 package org.apache.spark
 
 import akka.actor.ActorSystem
+import org.apache.spark.serializer.Serializer
 
 /**
  * :: DeveloperApi ::
@@ -14,6 +15,8 @@ import akka.actor.ActorSystem
  * in a future release.
  */
 class SparkEnv(
+                val serializer: Serializer,
+                val closureSerializer: Serializer,
                 val mapOutputTracker: MapOutputTracker,
                 val httpFileServer: HttpFileServer,
                 val securityManager: SecurityManager,

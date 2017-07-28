@@ -267,6 +267,8 @@ class SparkContext(config: SparkConf) extends Logging {
     }
   }
 
+  taskScheduler.
+
   /** Shut down the SparkContext. */
   def stop(): Unit ={
     postApplicationEnd()

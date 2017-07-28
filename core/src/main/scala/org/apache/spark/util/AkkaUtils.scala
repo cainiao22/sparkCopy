@@ -16,4 +16,10 @@ private[spark] object AkkaUtils extends Logging {
   def askTimeout(conf:SparkConf):FiniteDuration = {
     Duration.create(conf.getLong("spark.akka.askTimeout", 30), TimeUnit.SECONDS)
   }
+
+
+  /** Returns the configured max frame size for Akka messages in bytes. */
+  def maxFrameSizeBytes(conf: SparkConf): Int = {
+    conf.getInt("spark.akka.frameSize", 10) * 1024 * 1024
+  }
 }
