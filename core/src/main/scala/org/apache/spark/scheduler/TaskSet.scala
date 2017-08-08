@@ -12,4 +12,6 @@ private[spark] class TaskSet(val tasks:Array[Task[_]],
                               val priority:Int,
                               val properties: Properties) {
 
+  val id: String = stageId + "." + attempt
+
 }

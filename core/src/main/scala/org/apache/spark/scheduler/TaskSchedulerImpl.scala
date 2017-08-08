@@ -55,7 +55,7 @@ private[spark] class TaskSchedulerImpl(val sc: SparkContext,
   private val starvationTimer = new Timer(true)
 
   // Incrementing task IDs
-  val nextTaskId = new AtomicLong(0)
+  val nextTaskId: Long = new AtomicLong(0)
 
   // Which executor IDs we have executors on
   val activeExecutorIds = new mutable.HashSet[String]()
@@ -116,12 +116,12 @@ private[spark] class TaskSchedulerImpl(val sc: SparkContext,
    * sets for tasks in order of priority. We fill each node with tasks in a round-robin manner so
    * that tasks are balanced across the cluster.
    */
-  def resourceOffers(offers:Seq[WorkerOffer]):Seq[Seq[TaskDescription]] = synchronized {
+  def resourceOffers(offers: Seq[WorkerOffer]): Seq[Seq[TaskDescription]] = synchronized {
     SparkEnv.set(sc.env)
     // Mark each slave as alive and remember its hostname
-    for(o <- offers){
+    for (o <- offers) {
       executorIdToHost(o.executorId) = o.host
-      if(executorsByHost.contains(o.host)){
+      if (!executorsByHost.contains(o.host)) {
         executorsByHost(o.host) = new mutable.HashSet[String]
         executorAdded(o.executorId, o.host)
       }
@@ -141,22 +141,48 @@ private[spark] class TaskSchedulerImpl(val sc: SparkContext,
     // of locality levels so that it gets a chance to launch local tasks on all of them.
     //这里相当于双重循环，taskSet为外层，maxLocality为内层
     var launchedTask = false
-    for(taskset <- sortedTaskSets; maxLocality <- TaskLocality){
-      do{
+    for (tasksetManager <- sortedTaskSets; maxLocality <- TaskLocality) {
+      do {
         launchedTask = false
-        for(i <- 0 until shuffledOffers.size) {
+        for (i <- 0 until shuffledOffers.size) {
           val execId = shuffledOffers(i).executorId
           val host = shuffledOffers(i).host
-          if(availableCpus(i) >= CPUS_PER_TASK){
-
+          if (availableCpus(i) >= CPUS_PER_TASK) {
+            for (task <- tasksetManager.resourceOffer(execId, host, maxLocality)) {
+              tasks(i) += task
+              val tid = task.taskId
+              taskIdToTaskSetId(tid) = tasksetManager.taskSet.id
+              taskIdToExecutorId(tid) = execId
+              activeExecutorIds += execId
+              executorsByHost(host) += execId
+              availableCpus(i) -= CPUS_PER_TASK
+              assert(availableCpus(i) > 0)
+              launchedTask = true
+            }
           }
         }
-      }
+      } while (launchedTask)
     }
+    if (tasks.size > 0) {
+      hasLaunchedTask = true
+    }
+
+    return tasks
 
   }
 
   def executorAdded(execId: String, host: String) {
     dagScheduler.executorAdded(execId, host)
+  }
+
+  def hasExecutorsAliveOnHost(host: String): Boolean = synchronized {
+    executorsByHost.contains(host)
+  }
+
+  // By default, rack is unknown
+  def getRackForHost(value: String): Option[String] = None
+
+  def isExecutorAlive(execId: String): Boolean = synchronized {
+    activeExecutorIds.contains(execId)
   }
 }

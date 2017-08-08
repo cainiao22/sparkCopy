@@ -6,10 +6,10 @@ import akka.actor.{Actor, ActorRef, ActorSystem, Props}
 import akka.remote.RemotingLifecycleEvent
 import org.apache.spark.Logging
 import org.apache.spark.scheduler.cluster.CoarseGrainedClusterMessage.ReviveOffers
-import org.apache.spark.scheduler.{TaskDescription, SchedulerBackend, TaskSchedulerImpl}
+import org.apache.spark.scheduler.{WorkerOffer, TaskDescription, SchedulerBackend, TaskSchedulerImpl}
 import org.apache.spark.util.AkkaUtils
 
-import scala.collection.mutable.ArrayBuffer
+import scala.collection.mutable.{HashMap, ArrayBuffer}
 import scala.concurrent.duration._
 
 /**
@@ -21,7 +21,7 @@ import scala.concurrent.duration._
  * (spark.deploy.*).
  */
 private[spark] class CoarseGrainedSchedulerBackend(scheduler: TaskSchedulerImpl,
-                                                    actorSystem: ActorSystem
+                                                   actorSystem: ActorSystem
                                                     ) extends SchedulerBackend with Logging {
 
   var totalCoreCount = new AtomicInteger(0)
@@ -30,6 +30,10 @@ private[spark] class CoarseGrainedSchedulerBackend(scheduler: TaskSchedulerImpl,
   private val akkaFrameSize = AkkaUtils.maxFrameSizeBytes(conf)
 
   class DriverActor(sparkProperties: Seq[(String, String)]) extends Actor {
+
+    //executorId -> host
+    private val executorHost = new HashMap[String, String]
+    private val freeCores = new HashMap[String, Int]
 
     override def preStart = {
       // Listen for remote client disconnection events, since they don't go through Akka's watch()
@@ -42,29 +46,29 @@ private[spark] class CoarseGrainedSchedulerBackend(scheduler: TaskSchedulerImpl,
 
     }
 
-    override def receive ={
+    override def receive = {
 
       case ReviveOffers =>
-
-
-    }
-
-    def makeOffers(): Unit ={
+        makeOffers()
 
     }
 
-    def launchTask(tasks:Seq[Seq[TaskDescription]]): Unit ={
+    def makeOffers(): Unit = {
+      launchTask(scheduler.resourceOffers(
+        executorHost.toArray.map{case (id, host) => new WorkerOffer(id, host, freeCores(id))}))
+    }
+
+    def launchTask(tasks: Seq[Seq[TaskDescription]]): Unit = {
 
     }
   }
 
-  var driverActor:ActorRef = null
+  var driverActor: ActorRef = null
 
 
-
-  override def start(): Unit ={
+  override def start(): Unit = {
     val properties = new ArrayBuffer[(String, String)]
-    for((k, v) <- scheduler.sc.getConf.getAll() if k.startsWith("spark.")){
+    for ((k, v) <- scheduler.sc.getConf.getAll() if k.startsWith("spark.")) {
       properties.+=((k, v))
     }
 

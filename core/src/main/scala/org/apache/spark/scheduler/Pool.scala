@@ -86,4 +86,11 @@ private[spark] class Pool(val poolName:String,
   override def executorLost(executorId: String, host: String): Unit = {
     schedulableQueue.foreach(_.executorLost(executorId, host))
   }
+
+  def increaseRunningTasks(taskNum:Int): Unit ={
+    runningTasks += taskNum
+    if(parent != null){
+      parent.increaseRunningTasks(taskNum)
+    }
+  }
 }
