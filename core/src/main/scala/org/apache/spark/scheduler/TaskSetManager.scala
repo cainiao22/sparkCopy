@@ -291,8 +291,20 @@ private[spark] class TaskSetManager(sched: TaskSchedulerImpl,
           }
         }
       }
+    }
+    None
+  }
 
-      None
+  def abort(message: String) {
+    // TODO: Kill running tasks if we were not terminated due to a Mesos error
+    sched.dagScheduler.taskSetFailed(taskSet, message)
+    isZombie = true
+    maybeFinishTaskSet()
+  }
+
+  private def maybeFinishTaskSet() {
+    if (isZombie && runningTasks == 0) {
+      sched.taskSetFinished(this)
     }
   }
 

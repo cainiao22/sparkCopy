@@ -185,4 +185,16 @@ private[spark] class TaskSchedulerImpl(val sc: SparkContext,
   def isExecutorAlive(execId: String): Boolean = synchronized {
     activeExecutorIds.contains(execId)
   }
+
+  /**
+   * Called to indicate that all task attempts (including speculated tasks) associated with the
+   * given TaskSetManager have completed, so state associated with the TaskSetManager should be
+   * cleaned up.
+   */
+  def taskSetFinished(manager: TaskSetManager) = synchronized{
+    this.activeTaskSets -= manager.taskSet.id
+    manager.parent.removeScheduleable(manager)
+    logInfo("Removed TaskSet %s, whose tasks have all completed, from pool %s"
+      .format(manager.taskSet.id, manager.parent.name))
+  }
 }

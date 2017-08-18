@@ -2,7 +2,11 @@ package org.apache.spark.util
 
 import java.util.concurrent.TimeUnit
 
-import org.apache.spark.{SparkConf, Logging}
+import scala.collection.JavaConversions.mapAsJavaMap
+import akka.actor.ActorSystem
+import com.typesafe.config.ConfigFactory
+import org.apache.log4j.{Level, Logger}
+import org.apache.spark.{SparkConf, Logging, SecurityManager}
 
 import scala.concurrent.duration.{Duration, FiniteDuration}
 
@@ -12,8 +16,78 @@ import scala.concurrent.duration.{Duration, FiniteDuration}
 private[spark] object AkkaUtils extends Logging {
 
 
+  /**
+   * Creates an ActorSystem ready for remoting, with various Spark features. Returns both the
+   * ActorSystem itself and its port (which is hard to get from Akka).
+   *
+   * Note: the `name` parameter is important, as even if a client sends a message to right
+   * host + port, if the system name is incorrect, Akka will drop the message.
+   *
+   * If indestructible is set to true, the Actor System will continue running in the event
+   * of a fatal exception. This is used by [[org.apache.spark.executor.Executor]].
+   */
+  def createActorSystem(name: String, host: String, port: Int,
+                        conf: SparkConf, securityManager: SecurityManager): (ActorSystem, Int) = {
+    val akkaThreads = conf.getInt("spark.akka.threads", 4)
+    val akkaBatchSize = conf.getInt("spark.akka.batchSize", 15)
+
+    val akkaTimeout = conf.getInt("spark.akka.timeout", 100)
+
+    val akkaFrameSize = maxFrameSizeBytes(conf)
+    val akkaLogLifecycleEvents = conf.getBoolean("spark.akka.logLifecycleEvents", false)
+    val lifecycleEvents = if (akkaLogLifecycleEvents) "on" else "off"
+    if(!akkaLogLifecycleEvents){
+      // As a workaround for Akka issue #3787, we coerce the "EndpointWriter" log to be silent.
+      // See: https://www.assembla.com/spaces/akka/tickets/3787#/
+      Option(Logger.getLogger("akka.remote.EndpointWriter")).map(l => l.setLevel(Level.FATAL))
+    }
+    val logAkkaConfig = if (conf.getBoolean("spark.akka.logAkkaConfig", false)) "on" else "off"
+
+    val akkaHeartBeatPauses = conf.getInt("spark.akka.heartbeat.pauses", 600)
+    val akkaFailureDetector =
+      conf.getDouble("spark.akka.failure-detector.threshold", 300.0)
+    val akkaHeartBeatInterval = conf.getInt("spark.akka.heartbeat.interval", 1000)
+
+    val secretKey = securityManager.getSecretKey()
+    val isAuthOn = securityManager.isAuthenticationEnabled()
+    if (isAuthOn && secretKey == null) {
+      throw new Exception("Secret key is null with authentication on")
+    }
+    val requireCookie = if (isAuthOn) "on" else "off"
+    val secureCookie = if (isAuthOn) secretKey else ""
+    logDebug("In createActorSystem, requireCookie is: " + requireCookie)
+
+    val akkaConf = ConfigFactory.parseMap(conf.getAkkaConf.toMap[String, String]).withFallback(
+      ConfigFactory.parseString(
+        s"""
+           |akka.daemonic = on
+           |akka.loggers = [""akka.event.slf4j.Slf4jLogger""]
+           |akka.stdout-loglevel = "ERROR"
+           |akka.jvm-exit-on-fatal-error = off
+           |akka.remote.require-cookie = "$requireCookie"
+           |akka.remote.secure-cookie = "$secureCookie"
+           |akka.remote.transport-failure-detector.heartbeat-interval = $akkaHeartBeatInterval s
+           |akka.remote.transport-failure-detector.acceptable-heartbeat-pause = $akkaHeartBeatPauses s
+           |akka.remote.transport-failure-detector.threshold = $akkaFailureDetector
+           |akka.actor.provider = "akka.remote.RemoteActorRefProvider"
+           |akka.remote.netty.tcp.transport-class = "akka.remote.transport.netty.NettyTransport"
+           |akka.remote.netty.tcp.hostname = "$host"
+           |akka.remote.netty.tcp.port = $port
+           |akka.remote.netty.tcp.tcp-nodelay = on
+           |akka.remote.netty.tcp.connection-timeout = $akkaTimeout s
+           |akka.remote.netty.tcp.maximum-frame-size = ${akkaFrameSize}B
+           |akka.remote.netty.tcp.execution-pool-size = $akkaThreads
+           |akka.actor.default-dispatcher.throughput = $akkaBatchSize
+           |akka.log-config-on-start = $logAkkaConfig
+           |akka.remote.log-remote-lifecycle-events = $lifecycleEvents
+           |akka.log-dead-letters = $lifecycleEvents
+           |akka.log-dead-letters-during-shutdown = $lifecycleEvents
+      """.stripMargin))
+
+  }
+
   /** Returns the default Spark timeout to use for Akka ask operations. */
-  def askTimeout(conf:SparkConf):FiniteDuration = {
+  def askTimeout(conf: SparkConf): FiniteDuration = {
     Duration.create(conf.getLong("spark.akka.askTimeout", 30), TimeUnit.SECONDS)
   }
 
@@ -22,4 +96,7 @@ private[spark] object AkkaUtils extends Logging {
   def maxFrameSizeBytes(conf: SparkConf): Int = {
     conf.getInt("spark.akka.frameSize", 10) * 1024 * 1024
   }
+
+  /** Space reserved for extra data in an Akka message besides serialized task or task result. */
+  val reservedSizeBytes = 200 * 1024
 }

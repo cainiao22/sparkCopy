@@ -4,10 +4,10 @@ import java.util.concurrent.atomic.AtomicInteger
 
 import akka.actor.{Actor, ActorRef, ActorSystem, Props}
 import akka.remote.RemotingLifecycleEvent
-import org.apache.spark.Logging
-import org.apache.spark.scheduler.cluster.CoarseGrainedClusterMessage.ReviveOffers
+import org.apache.spark.scheduler.cluster.CoarseGrainedClusterMessages.{ReviveOffers, LaunchTask}
+import org.apache.spark.{SparkEnv, Logging}
 import org.apache.spark.scheduler.{WorkerOffer, TaskDescription, SchedulerBackend, TaskSchedulerImpl}
-import org.apache.spark.util.AkkaUtils
+import org.apache.spark.util.{SerializableBuffer, AkkaUtils}
 
 import scala.collection.mutable.{HashMap, ArrayBuffer}
 import scala.concurrent.duration._
@@ -30,7 +30,7 @@ private[spark] class CoarseGrainedSchedulerBackend(scheduler: TaskSchedulerImpl,
   private val akkaFrameSize = AkkaUtils.maxFrameSizeBytes(conf)
 
   class DriverActor(sparkProperties: Seq[(String, String)]) extends Actor {
-
+    private val executorActor = new HashMap[String, ActorRef]
     //executorId -> host
     private val executorHost = new HashMap[String, String]
     private val freeCores = new HashMap[String, Int]
@@ -41,7 +41,7 @@ private[spark] class CoarseGrainedSchedulerBackend(scheduler: TaskSchedulerImpl,
 
       // Periodically revive offers to allow delay scheduling to work
       val receiveInterval = conf.getLong("spark.scheduler.revive.interval", 1000)
-      import CoarseGrainedClusterMessage._
+      import CoarseGrainedClusterMessages._
       actorSystem.scheduler.schedule(0.millis, receiveInterval.millis, self, ReviveOffers)
 
     }
@@ -59,7 +59,27 @@ private[spark] class CoarseGrainedSchedulerBackend(scheduler: TaskSchedulerImpl,
     }
 
     def launchTask(tasks: Seq[Seq[TaskDescription]]): Unit = {
-
+      for(task <- tasks.flatten){
+        val ser = SparkEnv.get.closureSerializer.newInstance()
+        val serializedTask = ser.serialize(task)
+        if(serializedTask.limit() > akkaFrameSize - AkkaUtils.reservedSizeBytes){
+          val taskSetId = scheduler.taskIdToTaskSetId(task.taskId)
+          scheduler.activeTaskSets.get(taskSetId).foreach{taskSet =>
+            try {
+              var msg = "Serialized task %s:%d was %d bytes which " +
+                "exceeds spark.akka.frameSize (%d bytes). " +
+                "Consider using broadcast variables for large values."
+              msg = msg.format(task.taskId, task.index, serializedTask.limit, akkaFrameSize)
+              taskSet.abort(msg)
+            } catch {
+              case e: Exception => logError("Exception in error callback", e)
+            }
+          }
+        }else{
+          freeCores(task.executorId) -= scheduler.CPUS_PER_TASK
+          executorActor(task.executorId) ! LaunchTask(new SerializableBuffer(serializedTask))
+        }
+      }
     }
   }
 

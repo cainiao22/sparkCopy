@@ -2,6 +2,7 @@ package org.apache.spark.util
 
 import java.io._
 import java.net.{InetAddress, Inet4Address, NetworkInterface, URI, URL, URLConnection}
+import java.util.concurrent.ConcurrentHashMap
 import java.util.{UUID, Locale}
 
 import com.google.common.io.Files
@@ -670,5 +671,35 @@ private[spark] object Utils extends Logging {
     val userInfo = securityMgr.getHttpUser() + ":" + userCred
     new URI(uri.getScheme(), userInfo, uri.getHost(), uri.getPort(), uri.getPath(),
       uri.getQuery(), uri.getFragment())
+  }
+
+  // Typically, this will be of order of number of nodes in cluster
+  // If not, we should change it to LRUCache or something.
+  private val hostPortParseResults = new ConcurrentHashMap[String, (String, Int)]()
+
+  def parseHostPort(hostPort: String): (String,  Int) = {
+    val cached = hostPortParseResults.get(hostPort)
+    if(cached != null){
+      return cached
+    }
+    val index:Int = hostPort.lastIndexOf(":")
+    if(index == -1){
+      val retval = (hostPort, 0)
+      hostPortParseResults.put(hostPort, retval)
+      return retval
+    }
+    val retval = (hostPort.substring(0, index).trim(), hostPort.substring(index + 1).trim().toInt)
+    hostPortParseResults.putIfAbsent(hostPort, retval)
+    return retval
+  }
+
+  /**
+   * Allow setting a custom host name because when we run on Mesos we need to use the same
+   * hostname it reports to the master.
+   */
+  def setCustomHostname(hostname: String) {
+    // DEBUG code
+    Utils.checkHost(hostname)
+    customHostname = Some(hostname)
   }
 }
